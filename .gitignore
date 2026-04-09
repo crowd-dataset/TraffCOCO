@@ -209,3 +209,7 @@ __marimo__/
 # Instance specific files
 config
 secret
+
+# Storage folder
+data
+videos
