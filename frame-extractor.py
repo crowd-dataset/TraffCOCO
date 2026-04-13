@@ -642,6 +642,45 @@ def ensure_video_available(video_ref, video_index, downloaded_video_paths=None):
 # ----------------------------
 # Frame extraction
 # ----------------------------
+
+def build_requested_frame_times(ranges):
+    requested_times = []
+    seen = set()
+
+    for start_sec, end_sec in ranges:
+        current_time = start_sec
+        while current_time <= end_sec:
+            if current_time not in seen:
+                seen.add(current_time)
+                requested_times.append(current_time)
+            current_time += cfg.interval_seconds
+
+    return requested_times
+
+
+def expected_frame_targets(output_folder, video_name, ranges):
+    video_name = clean_name(video_name)
+    targets = []
+
+    for current_time in build_requested_frame_times(ranges):
+        output_filename = f"{video_name}_{current_time}.png"
+        output_path = os.path.join(output_folder, output_filename)
+        targets.append((current_time, output_filename, output_path))
+
+    return targets
+
+
+def count_existing_requested_frames(output_folder, video_name, ranges):
+    targets = expected_frame_targets(output_folder, video_name, ranges)
+    existing = [output_path for _, _, output_path in targets if os.path.exists(output_path)]
+    return len(existing), len(targets)
+
+
+def all_requested_frames_exist(output_folder, video_name, ranges):
+    existing_count, total_count = count_existing_requested_frames(output_folder, video_name, ranges)
+    return total_count > 0 and existing_count == total_count
+
+
 def extract_frames_for_ranges(video_path, output_folder, ranges):
     """
     Extract frames only inside the given ranges.
@@ -664,31 +703,13 @@ def extract_frames_for_ranges(video_path, output_folder, ranges):
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     video_name = clean_name(video_name)
 
-    requested_times = []
-    seen = set()
+    final_targets = expected_frame_targets(output_folder, video_name, ranges)
 
-    for start_sec, end_sec in ranges:
-        current_time = start_sec
-        while current_time <= end_sec:
-            if current_time not in seen:
-                seen.add(current_time)
-                requested_times.append(current_time)
-            current_time += cfg.interval_seconds
-
-    if not requested_times:
+    if not final_targets:
         logger.warning(f"No frame times requested for {video_path}")
         return 0
 
-    final_targets = []
-    existing_final = []
-
-    for current_time in requested_times:
-        output_filename = f"{video_name}_{current_time}.png"
-        output_path = os.path.join(output_folder, output_filename)
-        final_targets.append((current_time, output_filename, output_path))
-
-        if os.path.exists(output_path):
-            existing_final.append(output_path)
+    existing_final = [output_path for _, _, output_path in final_targets if os.path.exists(output_path)]
 
     temp_output_folder = output_folder + ".tmp"
 
@@ -781,7 +802,6 @@ def extract_frames_for_ranges(video_path, output_folder, ranges):
     logger.info(f"Finished {video_name}: extracted {saved_count} frame(s) to temp and promoted {promoted_count} to final")  # noqa: E501
     return promoted_count
 
-
 def delete_downloaded_videos(downloaded_video_paths):
     if not downloaded_video_paths:
         logger.info("No downloaded videos to delete.")
@@ -868,6 +888,26 @@ def delete_single_downloaded_video(video_path, downloaded_video_paths, video_ind
         return False
 
 
+def finalize_video_usage(video_key, video_path, remaining_video_uses, downloaded_video_paths, video_index, log_prefix):
+    if video_key in remaining_video_uses and remaining_video_uses[video_key] > 0:
+        remaining_video_uses[video_key] -= 1
+
+    remaining_after = remaining_video_uses.get(video_key, 0)
+    logger.info(f"{log_prefix}: remaining uses after processing for '{video_key}' = {remaining_after}")
+
+    if cfg.delete_downloaded_videos_after_processing:
+        if remaining_after == 0:
+            if video_path:
+                deleted_now = delete_single_downloaded_video(video_path, downloaded_video_paths, video_index)
+                logger.info(f"{log_prefix}: immediate delete attempted for '{video_key}' -> deleted={deleted_now}")
+            else:
+                logger.info(f"{log_prefix}: immediate delete skipped for '{video_key}' because no local video path is available")
+        else:
+            logger.info(f"{log_prefix}: immediate delete skipped for '{video_key}' because future uses remain")
+
+    return remaining_after
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -926,23 +966,11 @@ def main():
                 logger.info(f"Row {row_num}: starting video_ref={video_ref}")
                 logger.info(f"Row {row_num}: remaining uses before processing for '{video_key}' = {remaining_video_uses.get(video_key, 0)}")  # noqa: E501
 
-                video_path = ensure_video_available(video_ref, video_index, downloaded_video_paths)
-
-                if not video_path:
-                    logger.warning(f"Row {row_num}: video not found and download failed -> {video_ref}")
-                    if video_key in remaining_video_uses and remaining_video_uses[video_key] > 0:
-                        remaining_video_uses[video_key] -= 1
-                        logger.info(f"Row {row_num}: remaining uses after failed processing for '{video_key}' = {remaining_video_uses[video_key]}")  # noqa: E501
-                    continue
-
-                logger.info(f"Row {row_num}: resolved video path -> {video_path}")
-
                 start_entry = starts[i] if i < len(starts) else []
                 end_entry = ends[i] if i < len(ends) else []
                 time_entry = time_of_day_values[i] if i < len(time_of_day_values) else None
                 vehicle_entry = vehicle_types[i] if i < len(vehicle_types) else None
 
-                count = 0
                 grouped_ranges = build_segments_for_video(
                     start_entry=start_entry,
                     end_entry=end_entry,
@@ -953,45 +981,124 @@ def main():
 
                 if not grouped_ranges:
                     logger.warning(f"Row {row_num}: no valid ranges for video -> {video_ref}")
-                else:
-                    actual_video_name = os.path.splitext(os.path.basename(video_path))[0]
 
-                    for (time_folder, vehicle_folder), ranges in grouped_ranges.items():
-                        logger.info(f"Row {row_num}: processing {len(ranges)} range(s) for "
+                    finalize_video_usage(
+                        video_key=video_key,
+                        video_path=find_video_path(video_ref, video_index),
+                        remaining_video_uses=remaining_video_uses,
+                        downloaded_video_paths=downloaded_video_paths,
+                        video_index=video_index,
+                        log_prefix=f"Row {row_num}",
+                    )
+                    continue
+
+                existing_video_path = find_video_path(video_ref, video_index)
+                if existing_video_path:
+                    planned_video_name = os.path.splitext(os.path.basename(existing_video_path))[0]
+                else:
+                    planned_video_name = os.path.splitext(os.path.basename(str(video_ref).strip()))[0]
+
+                pending_groups = []
+
+                for (time_folder, vehicle_folder), ranges in grouped_ranges.items():
+                    output_folder = build_output_folder(
+                        continent=continent,
+                        country=country,
+                        state_raw=state,
+                        locality=locality,
+                        time_of_day=time_folder,
+                        vehicle_type=vehicle_folder,
+                        video_name=planned_video_name,
+                    )
+
+                    existing_count, total_count = count_existing_requested_frames(
+                        output_folder=output_folder,
+                        video_name=planned_video_name,
+                        ranges=ranges,
+                    )
+
+                    if total_count > 0 and existing_count == total_count:
+                        logger.info(f"Row {row_num}: all requested frames already exist for "
+                                    f"video '{video_ref}' under time_of_day='{time_folder}' "
+                                    f"and vehicle_type='{vehicle_folder}'. Skipping this group without downloading.")  # noqa: E501
+                        continue
+
+                    pending_groups.append((time_folder, vehicle_folder, ranges))
+
+                    if total_count == 0:
+                        logger.info(f"Row {row_num}: no requested frames resolved for "
                                     f"video '{video_ref}' under time_of_day='{time_folder}' "
                                     f"and vehicle_type='{vehicle_folder}'")
-
-                        output_folder = build_output_folder(
-                            continent=continent,
-                            country=country,
-                            state_raw=state,
-                            locality=locality,
-                            time_of_day=time_folder,
-                            vehicle_type=vehicle_folder,
-                            video_name=actual_video_name,
-                        )
-
-                        group_count = extract_frames_for_ranges(
-                            video_path=video_path,
-                            output_folder=output_folder,
-                            ranges=ranges,
-                        )
-                        count += group_count
-
-                    logger.info(f"Done: {video_path} -> {count} new frames")
-
-                if video_key in remaining_video_uses and remaining_video_uses[video_key] > 0:
-                    remaining_video_uses[video_key] -= 1
-
-                remaining_after = remaining_video_uses.get(video_key, 0)
-                logger.info(f"Row {row_num}: remaining uses after processing for '{video_key}' = {remaining_after}")
-
-                if cfg.delete_downloaded_videos_after_processing:
-                    if remaining_after == 0:
-                        deleted_now = delete_single_downloaded_video(video_path, downloaded_video_paths, video_index)
-                        logger.info(f"Row {row_num}: immediate delete attempted for '{video_key}' -> deleted={deleted_now}")  # noqa: E501
                     else:
-                        logger.info(f"Row {row_num}: immediate delete skipped for '{video_key}' because future uses remain")  # noqa: E501
+                        logger.info(f"Row {row_num}: {existing_count}/{total_count} requested frame(s) already exist for "
+                                    f"video '{video_ref}' under time_of_day='{time_folder}' "
+                                    f"and vehicle_type='{vehicle_folder}'. Download/extraction is still needed.")  # noqa: E501
+
+                if not pending_groups:
+                    logger.info(f"Row {row_num}: all requested frame groups already exist for video -> {video_ref}. "
+                                f"Skipping video resolution and download entirely.")
+
+                    finalize_video_usage(
+                        video_key=video_key,
+                        video_path=existing_video_path,
+                        remaining_video_uses=remaining_video_uses,
+                        downloaded_video_paths=downloaded_video_paths,
+                        video_index=video_index,
+                        log_prefix=f"Row {row_num}",
+                    )
+                    continue
+
+                video_path = ensure_video_available(video_ref, video_index, downloaded_video_paths)
+
+                if not video_path:
+                    logger.warning(f"Row {row_num}: video not found and download failed -> {video_ref}")
+                    finalize_video_usage(
+                        video_key=video_key,
+                        video_path=find_video_path(video_ref, video_index),
+                        remaining_video_uses=remaining_video_uses,
+                        downloaded_video_paths=downloaded_video_paths,
+                        video_index=video_index,
+                        log_prefix=f"Row {row_num}",
+                    )
+                    continue
+
+                logger.info(f"Row {row_num}: resolved video path -> {video_path}")
+
+                count = 0
+                actual_video_name = os.path.splitext(os.path.basename(video_path))[0]
+
+                for time_folder, vehicle_folder, ranges in pending_groups:
+                    logger.info(f"Row {row_num}: processing {len(ranges)} range(s) for "
+                                f"video '{video_ref}' under time_of_day='{time_folder}' "
+                                f"and vehicle_type='{vehicle_folder}'")
+
+                    output_folder = build_output_folder(
+                        continent=continent,
+                        country=country,
+                        state_raw=state,
+                        locality=locality,
+                        time_of_day=time_folder,
+                        vehicle_type=vehicle_folder,
+                        video_name=actual_video_name,
+                    )
+
+                    group_count = extract_frames_for_ranges(
+                        video_path=video_path,
+                        output_folder=output_folder,
+                        ranges=ranges,
+                    )
+                    count += group_count
+
+                logger.info(f"Done: {video_path} -> {count} new frames")
+
+                finalize_video_usage(
+                    video_key=video_key,
+                    video_path=video_path,
+                    remaining_video_uses=remaining_video_uses,
+                    downloaded_video_paths=downloaded_video_paths,
+                    video_index=video_index,
+                    log_prefix=f"Row {row_num}",
+                )
 
     logger.info("Reached end of CSV processing")
     logger.info(f"delete_downloaded_videos_after_processing={cfg.delete_downloaded_videos_after_processing}")
