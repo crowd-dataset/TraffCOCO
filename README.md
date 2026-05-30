@@ -92,10 +92,12 @@ source .venv/bin/activate
 
 **Step 8:** Ensure that dataset are present. Place required datasets (including **mapping.csv**) into the **data/** directory:
 
+Users can look into **mapping.csv** to see the available continents, countries, states, localities/cities, video IDs, time categories, and vehicle categories before updating the configuration.
 
 **Step 9:** Run the code for extracting the frame:
 ```command line
 python3 frame-extractor.py
+```
 
 
 ### Configuration of project
@@ -139,6 +141,7 @@ Example:
     }
   }
 }
+```
 
 ## License
 This project is licensed under the MIT License - see the LICENSE file for details.
