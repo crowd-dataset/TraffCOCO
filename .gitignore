@@ -209,6 +209,7 @@ __marimo__/
 # Instance specific files
 config
 secret
+random_frames
 
 # Storage folder
 data
