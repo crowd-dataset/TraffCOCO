@@ -166,7 +166,7 @@ cfg = SimpleNamespace(
     max_pages=500,
     debug=True,
     delete_downloaded_videos_after_processing=common.get_configs("delete_downloaded_videos"),
-    aliases=["tue1", "tue2", "tue3", "tue4"],
+    aliases=["tuecoco"],
 )
 
 secrets = SimpleNamespace(
