@@ -1,0 +1,16 @@
+Return ONLY JSON.
+
+Detect every traffic-related object.That means every traffic signs, pedastrians, traffic lights and so on.
+
+For each object return
+
+[
+{
+    "object_id":1,
+    "observed_object":"",
+    "object_group":"",
+    "description":""(should contain appearence description)
+}
+]
+
+Do not output anything else.
