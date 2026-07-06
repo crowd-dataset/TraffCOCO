@@ -2,7 +2,7 @@
 [project]
 name = "TraffCOCO"
 version = "0.1.0"
-description = "Knowledge Graph Guided Foundation Language Model for Traffic Annotation"
+description = "A modular traffic scene understanding and annotation pipeline for automated TrafficCOCO dataset generation."
 readme = "README.md"
 requires-python = ">=3.12"
 
