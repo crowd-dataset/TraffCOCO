@@ -24,7 +24,7 @@ class SmolVLM(HFVLM):
     models:
       scene_understanding:
         backend: smolvlm
-        model_name: HuggingFaceTB/SmolVLM2-2.2B-Instruct
+        model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
     """
 
     MODEL_CLASS = SmolVLMForConditionalGeneration
