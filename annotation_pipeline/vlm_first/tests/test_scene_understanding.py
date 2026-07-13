@@ -180,6 +180,8 @@ def main() -> None:
     # Process Images
     # ------------------------------------------------------------------
 
+    failed_images = []
+
     try:
 
         for index, image_path in enumerate(
@@ -197,25 +199,38 @@ def main() -> None:
             )
             logger.info("=" * 80)
 
-            objects = engine.process_image(
-                image_path=image_path,
-                cache=cache,
-            )
+            try:
 
-            logger.info(
-                "Detected {} traffic object(s).",
-                len(objects),
-            )
+                objects = engine.process_image(
+                    image_path=image_path,
+                    cache=cache,
+                )
 
-            logger.debug(
-                "Parsed Scene Understanding JSON:\n{}",
-                json.dumps(
-                    objects,
-                    indent=4,
-                    ensure_ascii=False,
-                ),
-            )
+                logger.info(
+                    "Detected {} traffic object(s).",
+                    len(objects),
+                )
 
+                logger.debug(
+                    "Parsed Scene Understanding JSON:\n{}",
+                    json.dumps(
+                        objects,
+                        indent=4,
+                        ensure_ascii=False,
+                    ),
+                )
+
+            except Exception as e:
+
+                logger.error(
+                    "Failed to process '{}': {}",
+                    image_path.name,
+                    e,
+                )
+
+                failed_images.append(image_path.name)
+
+                continue
     finally:
 
         logger.info(

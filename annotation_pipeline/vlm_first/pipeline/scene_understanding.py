@@ -61,9 +61,9 @@ class SceneUnderstandingEngine:
         self.model = model
 
         self.scene_prompt = load_prompt(
-            "smolvlm+prompt.txt",
-            prompts_dir=config.paths.prompts,
-        )
+                config.models.scene_understanding.prompt,
+                prompts_dir=config.paths.prompts,
+            )
 
         logger.info(
             "Initialized SceneUnderstandingEngine ({})",

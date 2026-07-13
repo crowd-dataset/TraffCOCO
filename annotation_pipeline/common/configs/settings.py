@@ -4,10 +4,10 @@ settings.py
 Centralized configuration system for the KGFLM Traffic Annotation Pipeline.
 
 This module is responsible for loading the pipeline configuration from
-pipeline_config.yaml and converting it into a strongly typed hierarchy of
+default.config and converting it into a strongly typed hierarchy of
 Python dataclasses.
 
-Rather than allowing every pipeline component to parse YAML files
+Rather than allowing every pipeline component to parse JSON files
 independently, configuration is loaded exactly once and shared across all
 pipeline stages.
 
@@ -39,7 +39,7 @@ Responsibilities
 • Resolve filesystem paths.
 • Load pipeline configuration.
 • Validate configured model backends.
-• Convert YAML into strongly typed configuration objects.
+• Convert JSON into strongly typed configuration objects.
 • Create output directories.
 • Provide a single immutable configuration object shared throughout the
   pipeline.
@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
+import json
 
 logger = CustomLogger(__name__)
 
@@ -66,9 +66,8 @@ logger = CustomLogger(__name__)
 # ============================================================================
 
 _DEFAULT_CONFIG_PATH = Path(
-    os.path.join(os.path.dirname(__file__), "pipeline_config.yaml")
+    os.path.join(os.path.dirname(__file__), "default.config")
 )
-
 
 # ============================================================================
 # Paths
@@ -200,7 +199,7 @@ class SceneUnderstandingConfig:
     """
     Return the active Scene Understanding model configuration.
 
-    The backend specified in pipeline_config.yaml determines which model
+    The backend specified in default.config determines which model
     configuration is returned.
 
     Raises
@@ -210,6 +209,8 @@ class SceneUnderstandingConfig:
     """
 
     backend: str
+
+    prompt: str
 
     models: dict[str, HFModelConfig]
 
@@ -506,7 +507,7 @@ def _resolve_paths(
     """
     Resolve every configured filesystem path.
 
-    Relative paths from the YAML configuration are converted into absolute
+    Relative paths from the JSON configuration are converted into absolute
     paths using the project root.
 
     Returns
@@ -555,12 +556,12 @@ def load_config(
     project_root: Path | str | None = None,
 ) -> PipelineConfig:
     """
-    Load the pipeline configuration from a YAML file.
+    Load the pipeline configuration from a config file.
 
     Parameters
     ----------
     config_path
-        Optional path to pipeline_config.yaml.
+        Optional path to default.config.
 
     project_root
         Optional override for the project root.
@@ -591,7 +592,7 @@ def load_config(
         encoding="utf-8",
     ) as file:
 
-        raw: dict[str, Any] = yaml.safe_load(file)
+        raw: dict[str, Any] = json.load(file)
     logger.debug(
         "Configuration file successfully parsed."
     )
@@ -644,6 +645,7 @@ def load_config(
 
     scene_understanding = SceneUnderstandingConfig(
         backend=scene_backend,
+        prompt=scene_raw["prompt"],
         models=scene_models,
     )
 

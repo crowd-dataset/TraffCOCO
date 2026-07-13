@@ -1,20 +1,16 @@
 """
 image_utils.py — Image discovery, loading, and encoding utilities.
 
-Central module for all image I/O so that no pipeline stage has to
-re-implement file discovery or format validation.
+Central image utility module used throughout the annotation pipeline.
 
-Usage:
-    from annotation_pipeline.common.utils.image_utils import (
-        discover_images,
-        load_image,
-        encode_image_base64,
-    )
+Provides image discovery, loading, validation and common image metadata.
+
+All pipeline stages should obtain images through this module rather than
+performing direct filesystem access.
 """
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 import cv2
@@ -129,80 +125,9 @@ def get_image_dimensions(path: Path | str) -> tuple[int, int]:
     h, w = img.shape[:2]
     return w, h
 
-
 # ===========================================================================
-# Base64 Encoding
+# Test Function
 # ===========================================================================
-
-
-def encode_image_base64(path: Path | str) -> str:
-    """
-    Read an image file and return its base64-encoded string.
-
-    Used for Vision Language Model API payloads that accept
-    inline base64 images.
-
-    Args:
-        path: Path to the image file.
-
-    Returns:
-        Base64-encoded string of the raw file bytes.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Image file not found: {path}")
-
-    with open(path, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode("utf-8")
-
-    logger.debug(
-        "Base64-encoded image: {} ({} chars)",
-        path.name,
-        len(encoded),
-    )
-    return encoded
-
-
-def get_image_mime_type(
-    path: Path | str,
-) -> str:
-    """
-    Determine the MIME type of an image from its file extension.
-
-    Parameters
-    ----------
-    path
-        Path to the image file.
-
-    Returns
-    -------
-    str
-        MIME type corresponding to the file extension.
-    """
-
-    suffix = Path(path).suffix.lower()
-
-    mime_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".bmp": "image/bmp",
-        ".tiff": "image/tiff",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }
-
-    return mime_map.get(
-        suffix,
-        "application/octet-stream",
-    )
-
-# ===========================================================================
-    # Test Function
-    # ===========================================================================
 
 def test_image_utils() -> None:
     """
@@ -278,28 +203,6 @@ def test_image_utils() -> None:
         "Image dimensions: {} x {}.",
          width,
          height,
-    )
-
-    # ------------------------------------------------------------------
-    # Base64 Encoding
-    # ------------------------------------------------------------------
-
-    encoded = encode_image_base64(images[0])
-
-    logger.info(
-        "Base64 length: {} characters.",
-            len(encoded),
-    )
-
-    # ------------------------------------------------------------------
-    # MIME Type
-    # ------------------------------------------------------------------
-
-    mime_type = get_image_mime_type(images[0])
-
-    logger.info(
-         "MIME type: '{}'.",
-         mime_type,
     )
 
     # ------------------------------------------------------------------

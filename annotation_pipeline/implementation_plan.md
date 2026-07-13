@@ -94,7 +94,7 @@ SAMPLE/                              # Project root
 │   │   ├── configs/
 │   │   │   ├── __init__.py
 │   │   │   ├── settings.py          # Dataclass-based config
-│   │   │   └── pipeline_config.yaml # YAML configuration
+│   │   │   └── default.config # JSON configuration
 │   │   └── cache/
 │   │       ├── __init__.py
 │   │       └── pipeline_cache.py    # Shared pipeline cache
