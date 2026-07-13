@@ -183,7 +183,7 @@ Maintainer guide:
         extensions there if the extractor begins producing another image format.
 
     Alias scope:
-        The entry point currently scans only ``tue5``. Expanding to multiple
+        The entry point currently scans only ``tuecoco``. Expanding to multiple
         aliases should happen in that alias loop so deduplication and final
         random selection still operate across the combined candidate pool.
 
@@ -339,7 +339,7 @@ class FrameCandidate:
         Attributes:
             url: Direct file URL for the candidate frame image.
             filename: Clean local filename derived from the remote URL.
-            alias: File server alias, such as ``tue5``.
+            alias: File server alias, such as ``tuecoco``.
             continent: Continent folder where the frame was found.
             country: Country folder where the frame was found.
             state: State folder where the frame was found.
@@ -731,7 +731,7 @@ def make_browse_url(base_url, alias, folder_parts, trailing_slash=True):
 
         Args:
             base_url: Root file server URL.
-            alias: Server alias, for example ``tue5``.
+            alias: Server alias, for example ``tuecoco``.
             folder_parts: Dataset folder components under the alias browse root.
             trailing_slash: Whether to append a trailing slash to the browse URL.
 
@@ -1787,9 +1787,9 @@ def get_random_frames_from_common_config():
     session = make_session()
     discovered = []
 
-    # This script currently samples from tue5. Add more aliases here if the
+    # This script currently samples from tuecoco. Add more aliases here if the
     # random frame pool should span additional server roots.
-    for alias in ["tue5"]:
+    for alias in ["tuecoco"]:
         logger.info(f"\nScanning alias={alias}")
 
         alias_candidates = collect_candidates_for_alias(
