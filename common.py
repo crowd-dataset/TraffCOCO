@@ -82,32 +82,40 @@ def check_config(config_file_name: str = 'config',
     # load config file
     try:
         with open(os.path.join(root_dir, config_file_name)) as f:
-            config = json.load(f)
+            json.load(f)
+
     except FileNotFoundError:
-        logger.error('Config file {} not found.', config_file_name)
-        return False
+        logger.info(
+            "Config file '{}' not found. Using '{}'.",
+            config_file_name,
+            config_default_file_name,
+        )
+
     except json.decoder.JSONDecodeError:
-        logger.error('Config file badly formatted. Please update based on default.config.', config_file_name)
+        logger.error(
+            "Config file badly formatted. Please update based on default.config."
+        )
         return False
-    # load default.config file
+
+    # Load default.config
     try:
         with open(os.path.join(root_dir, config_default_file_name)) as f:
-            default = json.load(f)
+            json.load(f)
+
     except FileNotFoundError:
-        logger.error('Default config file {} not found.', config_file_name)
+        logger.error(
+            "Default config file '{}' not found.",
+            config_default_file_name,
+        )
         return False
+
     except json.decoder.JSONDecodeError:
-        logger.error('Config file badly formatted. Please update based on default.config.', config_file_name)
+        logger.error(
+            "Default config file badly formatted."
+        )
         return False
-    # check length of each file
-    if len(config) < len(default):
-        logger.error('Config file has {} variables, which is fewer than {} variables in default.config. Please'
-                     + ' update.',
-                     len(config),
-                     len(default))
-        return False
-    else:
-        return True
+    return True
+
 
 
 def search_dict(dictionary, search_for, nested=False):

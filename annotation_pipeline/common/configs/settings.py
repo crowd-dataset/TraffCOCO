@@ -4,10 +4,10 @@ settings.py
 Centralized configuration system for the KGFLM Traffic Annotation Pipeline.
 
 This module is responsible for loading the pipeline configuration from
-default.config and converting it into a strongly typed hierarchy of
+pipeline_config.yaml and converting it into a strongly typed hierarchy of
 Python dataclasses.
 
-Rather than allowing every pipeline component to parse JSON files
+Rather than allowing every pipeline component to parse YAML files
 independently, configuration is loaded exactly once and shared across all
 pipeline stages.
 
@@ -39,7 +39,7 @@ Responsibilities
 • Resolve filesystem paths.
 • Load pipeline configuration.
 • Validate configured model backends.
-• Convert JSON into strongly typed configuration objects.
+• Convert YAML into strongly typed configuration objects.
 • Create output directories.
 • Provide a single immutable configuration object shared throughout the
   pipeline.
@@ -65,8 +65,8 @@ logger = CustomLogger(__name__)
 # Default Configuration
 # ============================================================================
 
-_DEFAULT_CONFIG_PATH = Path(
-    os.path.join(os.path.dirname(__file__), "default.config")
+_DEFAULT_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3] / "default.config"
 )
 
 # ============================================================================
@@ -189,6 +189,21 @@ class HFModelConfig:
             raise ValueError(
                 "Temperature must be non-negative."
             )
+
+@dataclass(frozen=True)
+class EmbeddingModelConfig:
+    """
+    Configuration for the ontology embedding model.
+    """
+
+    model_id: str
+
+    device: str = "cpu"
+
+    normalize_embeddings: bool = True
+
+    top_k: int = 10
+
 # ============================================================================
 # Scene Understanding
 # ============================================================================
@@ -210,8 +225,6 @@ class SceneUnderstandingConfig:
 
     backend: str
 
-    prompt: str
-
     models: dict[str, HFModelConfig]
 
     @property
@@ -231,6 +244,17 @@ class SceneUnderstandingConfig:
                 f"'{self.backend}'. "
                 f"Available backends: {sorted(self.models.keys())}"
             ) from exc
+
+# ============================================================================
+# Ontology Reasoning
+# ============================================================================
+@dataclass(frozen=True)
+class OntologyReasoningConfig:
+    """
+    Configuration for ontology reasoning.
+    """
+
+    embedding: EmbeddingModelConfig
 
 # ============================================================================
 # Grounding
@@ -341,6 +365,8 @@ class ModelsConfig:
 
     scene_understanding: SceneUnderstandingConfig
 
+    ontology_reasoning: OntologyReasoningConfig
+
     grounding: GroundingConfig
 
     segmentation: SegmentationConfig
@@ -378,6 +404,19 @@ class PipelineParams:
 
     benchmark: bool = False
 
+    download_random_frames: bool = True
+
+    run_scene_understanding: bool = True
+
+    run_ontology_reasoning: bool = False
+
+    run_prompt_builder: bool = False
+
+    run_grounding: bool = False
+
+    run_segmentation: bool = False
+
+    run_annotation: bool = False
 
 # ============================================================================
 # Logging
@@ -427,7 +466,37 @@ class ProjectConfig:
 # ============================================================================
 # Top-Level Configuration
 # ============================================================================
+@dataclass(frozen=True)
+class RandomFrameSamplerConfig:
+    """
+    Configuration for the random frame sampler.
+    """
 
+    frames: str
+
+    videos: str
+
+    mapping: str
+
+    interval_seconds: int
+
+    base_url: str
+
+    delete_downloaded_videos: bool
+
+    logger_level: str
+
+    num_images: int
+
+    local_output_root: str
+
+    day_nights: tuple[str, ...]
+
+    vehicles: tuple[str, ...]
+
+    video_ids: tuple[str, ...]
+
+    location_tree: dict[str, Any]
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -446,6 +515,8 @@ class PipelineConfig:
     pipeline: PipelineParams
 
     logging: LoggingConfig
+
+    sampler: RandomFrameSamplerConfig
 
 # ============================================================================
 # Path Resolution
@@ -593,6 +664,9 @@ def load_config(
     ) as file:
 
         raw: dict[str, Any] = json.load(file)
+
+    raw_config = raw.get("annotation_pipeline", raw)
+
     logger.debug(
         "Configuration file successfully parsed."
     )
@@ -624,7 +698,7 @@ def load_config(
         "Initializing filesystem paths."
     )
     paths = _resolve_paths(
-        raw.get("paths", {}),
+        raw_config.get("paths", {}),
         root,
     )
 
@@ -634,7 +708,7 @@ def load_config(
     logger.info(
         "Initializing Scene Understanding configuration."
     )
-    scene_raw = raw["models"]["scene_understanding"]
+    scene_raw = raw_config["models"]["scene_understanding"]
 
     scene_backend = scene_raw["backend"].strip().lower()
 
@@ -645,12 +719,25 @@ def load_config(
 
     scene_understanding = SceneUnderstandingConfig(
         backend=scene_backend,
-        prompt=scene_raw["prompt"],
         models=scene_models,
     )
 
     # Validate backend
     _ = scene_understanding.active
+
+
+    # ----------------------------------------------------------------------
+    # Ontology Reasoning
+    # ----------------------------------------------------------------------
+
+    ontology_raw = raw_config["models"]["ontology_reasoning"]
+
+    ontology_reasoning = OntologyReasoningConfig(
+
+        embedding=EmbeddingModelConfig(
+            **ontology_raw["embedding"],
+        ),
+    )
 
     # ----------------------------------------------------------------------
     # Grounding
@@ -658,7 +745,7 @@ def load_config(
     logger.info(
         "Initializing Grounding configuration."
     )
-    grounding_raw = raw["models"]["grounding"]
+    grounding_raw = raw_config["models"]["grounding"]
 
     grounding_backend = grounding_raw["backend"].strip().lower()
 
@@ -681,7 +768,7 @@ def load_config(
     logger.info(
         "Initializing Segmentation configuration."
     )
-    segmentation_raw = raw["models"]["segmentation"]
+    segmentation_raw = raw_config["models"]["segmentation"]
 
     segmentation_backend = segmentation_raw["backend"].strip().lower()
 
@@ -705,6 +792,8 @@ def load_config(
 
         scene_understanding=scene_understanding,
 
+        ontology_reasoning=ontology_reasoning,
+
         grounding=grounding,
 
         segmentation=segmentation,
@@ -716,7 +805,7 @@ def load_config(
     logger.info(
         "Initializing pipeline parameters."
     )
-    pipeline_raw = raw.get(
+    pipeline_raw = raw_config.get(
         "pipeline",
         {},
     )
@@ -738,7 +827,40 @@ def load_config(
         "Initializing logging configuration."
     )
     logging_config = LoggingConfig(
-        **raw.get("logging", {})
+        **raw_config.get("logging", {})
+    )
+
+    # ----------------------------------------------------------------------
+    # Random Frame Sampler
+    # ----------------------------------------------------------------------
+
+    sampler = RandomFrameSamplerConfig(
+
+        frames=raw["frames"],
+
+        videos=raw["videos"],
+
+        mapping=raw["mapping"],
+
+        interval_seconds=raw["interval_seconds"],
+
+        base_url=raw["base_url"],
+
+        delete_downloaded_videos=raw["delete_downloaded_videos"],
+
+        logger_level=raw["logger_level"],
+
+        num_images=raw["num_images"],
+
+        local_output_root=raw["local_output_root"],
+
+        day_nights=tuple(raw["DAY_NIGHTS"]),
+
+        vehicles=tuple(raw["VEHICLES"]),
+
+        video_ids=tuple(raw["VIDEO_IDS"]),
+
+        location_tree=raw["LOCATION_TREE"],
     )
 
     # ----------------------------------------------------------------------
@@ -756,6 +878,8 @@ def load_config(
         pipeline=pipeline,
 
         logging=logging_config,
+
+        sampler=sampler,
     )
 
     logger.info(
