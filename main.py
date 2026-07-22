@@ -162,23 +162,6 @@ def main() -> None:
     """
 
     # ------------------------------------------------------------------
-    # Command-line Arguments
-    # ------------------------------------------------------------------
-
-    parser = argparse.ArgumentParser(
-        description="VLM-First Pipeline",
-    )
-
-    parser.add_argument(
-        "--images",
-        type=int,
-        default=config.num_images,
-        help="Number of images to process (0 = all).",
-    )
-
-    args = parser.parse_args()
-
-    # ------------------------------------------------------------------
     # Load Configuration
     # ------------------------------------------------------------------
 
@@ -196,6 +179,24 @@ def main() -> None:
     logger.info("=" * 80)
     logger.info("VLM-First Pipeline")
     logger.info("=" * 80)
+
+
+    # ------------------------------------------------------------------
+    # Command-line Arguments
+    # ------------------------------------------------------------------
+
+    parser = argparse.ArgumentParser(
+        description="VLM-First Pipeline",
+    )
+
+    parser.add_argument(
+        "--images",
+        type=int,
+        default=config.pipeline.num_images,
+        help="Number of images to process (0 = all).",
+    )
+
+    args = parser.parse_args()
 
     # ------------------------------------------------------------------
     # Prepare Random Frames
