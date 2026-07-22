@@ -172,7 +172,7 @@ def main() -> None:
     parser.add_argument(
         "--images",
         type=int,
-        default=1,
+        default=config.num_images,
         help="Number of images to process (0 = all).",
     )
 
