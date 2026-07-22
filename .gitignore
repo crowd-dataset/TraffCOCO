@@ -214,3 +214,6 @@ random_frames
 # Storage folder
 data
 videos
+
+#outputs
+outputs

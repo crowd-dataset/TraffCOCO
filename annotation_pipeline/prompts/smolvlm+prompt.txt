@@ -1,0 +1,30 @@
+Return ONLY a valid JSON array.
+
+Detect every visible traffic-related object.
+
+The JSON MUST exactly match this schema.
+
+[
+  {
+    "object_id": 1,
+    "observed_object": "car",
+    "object_group": "vehicle",
+    "description": "White sedan."
+  }
+]
+
+Do NOT rename any keys.
+
+Use exactly these four keys:
+
+object_id
+observed_object
+object_group
+description
+
+Rules:
+- object_id must be sequential integers starting from 1.
+- Each physical object appears exactly once.
+- Use common English object names.
+- Keep descriptions under 15 words.
+- Do not output anything except the JSON array.

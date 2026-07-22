@@ -22,10 +22,10 @@ from __future__ import annotations
 
 from custom_logger import CustomLogger
 
-from annotation_pipeline.common.configs.settings import PipelineConfig
+from annotation_pipeline.configs.settings import PipelineConfig
 
-from annotation_pipeline.common.models.vlm.gemma import GemmaVL
-from annotation_pipeline.common.models.vlm.smolvlm import SmolVLM
+from annotation_pipeline.models.vlm.gemma import GemmaVL
+from annotation_pipeline.models.vlm.smolvlm import SmolVLM
 
 logger = CustomLogger(__name__)
 
@@ -51,9 +51,7 @@ def create_scene_model(config: PipelineConfig):
         Configured VLM instance.
     """
 
-    scene_cfg = config.models.scene_understanding
-
-    backend = scene_cfg.backend.lower()
+    backend = config.models.scene_understanding_backend.lower()
 
     if backend not in _SUPPORTED_MODELS:
 
@@ -64,11 +62,25 @@ def create_scene_model(config: PipelineConfig):
             f"Supported backends: {supported}"
         )
 
-    logger.info("Scene Understanding backend: {}", backend)
+    logger.info(
+        "Scene Understanding backend: {}",
+        backend,
+    )
 
-    # Active model configuration selected by the backend
-    model_cfg = scene_cfg.active
+    if backend == "gemma":
+
+        model_id = config.models.gemma_model_id
+
+    elif backend == "smolvlm":
+
+        model_id = config.models.smolvlm_model_id
+
+    else:
+        # Defensive programming (should never happen)
+        raise RuntimeError(
+            f"No model ID configured for backend '{backend}'."
+        )
 
     model_cls = _SUPPORTED_MODELS[backend]
 
-    return model_cls(model_cfg)
+    return model_cls(model_id)

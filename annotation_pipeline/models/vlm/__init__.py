@@ -27,8 +27,8 @@ Typical usage:
     model.unload()
 """
 
-from annotation_pipeline.common.models.vlm.base_vlm import BaseVLM
-from annotation_pipeline.common.models.vlm.model_loader import create_scene_model
+from annotation_pipeline.models.vlm.base_vlm import BaseVLM
+from annotation_pipeline.models.vlm.model_loader import create_scene_model
 
 __all__ = [
     "BaseVLM",

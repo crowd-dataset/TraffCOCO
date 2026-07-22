@@ -60,7 +60,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-from annotation_pipeline.common.models.vlm.base_vlm import BaseVLM
+from annotation_pipeline.models.vlm.base_vlm import BaseVLM
 
 logger = CustomLogger(__name__)
 
@@ -76,6 +76,24 @@ class HFVLM(BaseVLM):
 
     MODEL_CLASS = None
 
+    DEFAULT_DEVICE = "cuda"
+
+    DEFAULT_DTYPE = "bfloat16"
+
+    DEFAULT_ATTENTION_IMPLEMENTATION = "eager"
+
+    DEFAULT_TRUST_REMOTE_CODE = True
+
+    DEFAULT_COMPILE = False
+
+    DEFAULT_MAX_NEW_TOKENS = 512
+
+    DEFAULT_TEMPERATURE = 0.0
+
+    DEFAULT_QUANTIZATION = None
+
+    DEFAULT_DO_SAMPLE = False
+
     # -------------------------------------------------------------------------
     # Initialization
     # -------------------------------------------------------------------------
@@ -87,34 +105,44 @@ class HFVLM(BaseVLM):
     executing inference.
     """
 
-    def __init__(self, model_config):
+    def __init__(
+        self,
+        model_id: str,
+    ):
+        super().__init__(model_id)
 
-        super().__init__(model_config)
+        self.model_id = model_id
 
-        self.model_id = model_config.model_id
+        self.device = self.DEFAULT_DEVICE
 
-        self.device = model_config.device
+        if self.DEFAULT_DTYPE == "auto":
+            if torch.cuda.is_available():
+                self.dtype = torch.bfloat16
+            else:
+                self.dtype = torch.float32
+        else:
+            self.dtype = getattr(torch, self.DEFAULT_DTYPE)
 
-        self.dtype = getattr(torch, model_config.dtype)
+        self.attention = self.DEFAULT_ATTENTION_IMPLEMENTATION
 
-        self.attention = model_config.attention
+        self.trust_remote_code = self.DEFAULT_TRUST_REMOTE_CODE
 
-        self.trust_remote_code = model_config.trust_remote_code
+        self.compile = self.DEFAULT_COMPILE
 
-        self.compile = model_config.compile
+        self.max_new_tokens = self.DEFAULT_MAX_NEW_TOKENS
 
-        self.max_new_tokens = model_config.max_new_tokens
+        self.temperature = self.DEFAULT_TEMPERATURE
 
-        self.temperature = model_config.temperature
+        self.quantization = self.DEFAULT_QUANTIZATION
 
-        # Optional settings
-        self.quantization = getattr(model_config, "quantization", None)
+        self.do_sample = self.DEFAULT_DO_SAMPLE
 
-        self.do_sample = getattr(model_config, "do_sample", False)
         logger.debug(
             "Initialized Hugging Face backend '{}'.",
             self.model_id,
         )
+        
+
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
@@ -217,6 +245,10 @@ class HFVLM(BaseVLM):
             "Successfully loaded '{}'.",
             self.model_id,
         )
+        logger.info(
+            "Model dtype: {}",
+            next(self.model.parameters()).dtype,
+        )
     # ------------------------------------------------------------------
     # Unload
     # ------------------------------------------------------------------
@@ -296,16 +328,30 @@ class HFVLM(BaseVLM):
             k: v.to(self.model.device)
             for k, v in inputs.items()
         }
+        for k, v in inputs.items():
+            if torch.is_tensor(v):
+                logger.info("{} -> device={}, dtype={}", k, v.device, v.dtype)
 
         with torch.no_grad():
             logger.info(
                 "Generating scene description..."
             )
+            generate_kwargs = {
+                "max_new_tokens": self.max_new_tokens,
+                "do_sample": self.do_sample,
+            }
+
+            # Only use temperature when sampling
+            if self.do_sample:
+                generate_kwargs["temperature"] = self.temperature
+
+            # Reduce repetition
+            generate_kwargs["repetition_penalty"] = 1.15
+            generate_kwargs["no_repeat_ngram_size"] = 3
+
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                do_sample=self.do_sample,
+                **generate_kwargs,
             )
 
         input_length = inputs["input_ids"].shape[1]

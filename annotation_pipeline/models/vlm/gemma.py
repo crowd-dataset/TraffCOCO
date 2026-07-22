@@ -50,7 +50,7 @@ from transformers import Gemma3ForConditionalGeneration
 
 from custom_logger import CustomLogger
 
-from annotation_pipeline.common.models.vlm.hf_vlm import HFVLM
+from annotation_pipeline.models.vlm.hf_vlm import HFVLM
 
 logger = CustomLogger(__name__)
 
@@ -79,13 +79,27 @@ class GemmaVL(HFVLM):
 
     MODEL_CLASS = Gemma3ForConditionalGeneration
 
+    DEFAULT_DEVICE = "cuda"
+
+    DEFAULT_DTYPE = "auto"
+
+    DEFAULT_ATTENTION_IMPLEMENTATION = "eager"
+
+    DEFAULT_MAX_NEW_TOKENS = 512
+
+    DEFAULT_TEMPERATURE = 0.0
+
+    DEFAULT_DO_SAMPLE = False
+
+    DEFAULT_SYSTEM_PROMPT = None
+
     # -------------------------------------------------------------------------
     # Initialization
     # -------------------------------------------------------------------------
 
     def __init__(
         self,
-        config: Any,
+        model_id: str,
     ) -> None:
         """
         Initialize the Gemma Vision-Language Model.
@@ -97,58 +111,11 @@ class GemmaVL(HFVLM):
             configuration.
         """
 
-        super().__init__(config)
+        super().__init__(model_id)
 
         logger.info(
             "Initialized Gemma Scene Understanding backend '{}'.",
-            self.model_name,
+            self.model_id,
         )
 
-    # -------------------------------------------------------------------------
-    # Message Construction
-    # -------------------------------------------------------------------------
-
-    def build_messages(
-        self,
-        image: Any,
-        prompt: str,
-    ) -> list[dict[str, Any]]:
-        """
-        Construct a Gemma-compatible multimodal conversation.
-
-        The Hugging Face processor expects a chat conversation consisting
-        of an image followed by the textual Scene Understanding prompt.
-
-        Parameters
-        ----------
-        image
-            Loaded PIL image.
-
-        prompt
-            Scene Understanding prompt.
-
-        Returns
-        -------
-        list[dict[str, Any]]
-            Conversation formatted according to the Gemma chat template.
-        """
-
-        logger.debug(
-            "Building Gemma chat message."
-        )
-
-        return [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "image": image,
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    },
-                ],
-            }
-        ]
+    

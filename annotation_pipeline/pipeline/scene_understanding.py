@@ -27,13 +27,14 @@ from __future__ import annotations
 import json
 from custom_logger import CustomLogger
 import re
+import traceback
 from pathlib import Path
 from typing import Any
 import os
-from annotation_pipeline.common.cache.pipeline_cache import PipelineCache
-from annotation_pipeline.common.configs.settings import PipelineConfig
-from annotation_pipeline.common.models.vlm.base_vlm import BaseVLM
-from annotation_pipeline.common.prompts.load_prompt import load_prompt
+from annotation_pipeline.cache.pipeline_cache import PipelineCache
+from annotation_pipeline.configs.settings import PipelineConfig
+from annotation_pipeline.models.vlm.base_vlm import BaseVLM
+from annotation_pipeline.prompts.load_prompt import load_prompt
 
 logger = CustomLogger(__name__)
 
@@ -246,10 +247,9 @@ class SceneUnderstandingEngine:
             )
 
         except Exception as exc:
+            
 
-            logger.error(
-                "Scene Understanding model inference failed."
-            )
+            logger.error("{}", traceback.format_exc())
 
             raise RuntimeError(
                 "Scene Understanding model failed."

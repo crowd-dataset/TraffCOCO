@@ -82,7 +82,7 @@ def check_config(config_file_name: str = 'config',
     # load config file
     try:
         with open(os.path.join(root_dir, config_file_name)) as f:
-            json.load(f)
+            config = json.load(f)
 
     except FileNotFoundError:
         logger.info(
@@ -90,6 +90,7 @@ def check_config(config_file_name: str = 'config',
             config_file_name,
             config_default_file_name,
         )
+        return True
 
     except json.decoder.JSONDecodeError:
         logger.error(
@@ -100,7 +101,7 @@ def check_config(config_file_name: str = 'config',
     # Load default.config
     try:
         with open(os.path.join(root_dir, config_default_file_name)) as f:
-            json.load(f)
+            default = json.load(f)
 
     except FileNotFoundError:
         logger.error(
@@ -114,9 +115,18 @@ def check_config(config_file_name: str = 'config',
             "Default config file badly formatted."
         )
         return False
+
+    # Check for missing keys
+    missing = set(default.keys()) - set(config.keys())
+
+    if missing:
+        logger.error(
+            "Config file is missing the following keys: {}",
+            ", ".join(sorted(missing)),
+        )
+        return False
+
     return True
-
-
 
 def search_dict(dictionary, search_for, nested=False):
     """

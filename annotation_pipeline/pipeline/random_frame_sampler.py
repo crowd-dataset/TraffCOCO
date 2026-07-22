@@ -243,7 +243,7 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from custom_logger import CustomLogger
-from logmod import logs
+
 
 
 # =============================================================================
@@ -281,7 +281,6 @@ FILL_IMAGES_PER_VIDEO_FOLDER = 5
 # from locations that still have available frames.
 BALANCE_ACROSS_LOCATIONS = True
 
-logs(show_level=common.get_configs("logger_level"), show_color=True)
 logger = CustomLogger(__name__)  # use custom logger
 
 # =============================================================================
