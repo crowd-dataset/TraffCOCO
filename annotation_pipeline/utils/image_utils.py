@@ -16,6 +16,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from annotation_pipeline.configs.settings import load_config
+
 from custom_logger import CustomLogger
 
 logger = CustomLogger(__name__)
@@ -140,7 +142,6 @@ def test_image_utils() -> None:
     ---
     python -m annotation_pipeline.common.utils.image_utils
     """
-    from annotation_pipeline.common.configs.settings import load_config
 
     logger.info("=" * 70)
     logger.info("Image Utilities Test")

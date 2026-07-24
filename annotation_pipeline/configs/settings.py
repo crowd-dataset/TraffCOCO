@@ -86,6 +86,12 @@ class PathsConfig:
 
     ontology: Path
 
+    ontology_file: Path
+
+    ontology_index: Path
+
+    ontology_metadata: Path
+
     prompts: Path
 
     outputs: Path
@@ -104,10 +110,7 @@ class PathsConfig:
 
     def ensure_output_dirs(self) -> None:
         """
-        Create every configured output directory.
-
-        The pipeline expects all output directories to exist before execution.
-        Missing directories are automatically created.
+        Create output directories.
         """
 
         directories = [
@@ -126,20 +129,16 @@ class PathsConfig:
 
             self.logs,
 
+            self.ontology_index.parent,
+
         ]
 
         for directory in directories:
-
-            logger.debug(
-                "Ensuring directory exists: '{}'.",
-                directory,
-            )
 
             directory.mkdir(
                 parents=True,
                 exist_ok=True,
             )
-
 
 # ============================================================================
 # Models
@@ -158,8 +157,10 @@ class ModelsConfig:
     smolvlm_model_id: str
 
     embedding_model_id: str
+    embedding_device: str
     save_index: bool
     rebuild_index: bool
+    top_k: int
 
     locate_anything_model_id: str
 
@@ -343,12 +344,21 @@ def _resolve_paths(project_root: Path) -> PathsConfig:
         "Resolving filesystem paths."
     )
     outputs = project_root / "annotation_pipeline" / "outputs"
+
+    ontology_root = project_root/ "annotation_pipeline"/ "ontology"
+    
     paths = PathsConfig(
         project_root=project_root,
 
         random_frames=project_root / "random_frames",
 
-        ontology=project_root / "annotation_pipeline" / "ontology",
+        ontology=ontology_root,
+
+        ontology_file=ontology_root / "traffic_ontology_v2.json",
+
+        ontology_index=ontology_root/ "traffic_ontology.index",
+
+        ontology_metadata=ontology_root/ "traffic_ontology.pkl",
 
         prompts=project_root / "annotation_pipeline" / "prompts",
 
@@ -465,9 +475,13 @@ def load_config(
 
         embedding_model_id=raw["ontology_reasoning"]["embedding"]["model_id"],
 
+        embedding_device=raw["ontology_reasoning"]["embedding"]["device"],
+
         save_index=raw["ontology_reasoning"]["save_index"],
 
         rebuild_index=raw["ontology_reasoning"]["rebuild_index"],
+
+        top_k=raw["ontology_reasoning"].get("top_k", 10),
 
         locate_anything_model_id=raw["grounding"]["locate_anything_model_id"],
 

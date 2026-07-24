@@ -217,3 +217,7 @@ videos
 
 #outputs
 outputs
+
+#generated model files
+*.pkl
+*.index
