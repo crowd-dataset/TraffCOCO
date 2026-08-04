@@ -54,10 +54,10 @@ import numpy as np
 from custom_logger import CustomLogger
 
 from annotation_pipeline.configs.settings import PipelineConfig
-from TraffCOCO.annotation_pipeline.models.ontology.embedding_model import (
+from annotation_pipeline.models.ontology.embedding_model import (
     EmbeddingModel,
 )
-from TraffCOCO.annotation_pipeline.models.ontology.ontology_models import (
+from annotation_pipeline.models.ontology.ontology_models import (
     CandidateMatch,
     OntologyEntry,
     RetrievalQuery,

@@ -29,15 +29,15 @@ from custom_logger import CustomLogger
 
 from annotation_pipeline.configs.settings import PipelineConfig
 
-from TraffCOCO.annotation_pipeline.models.ontology.ontology_index import (
+from annotation_pipeline.models.ontology.ontology_index import (
     OntologyIndex,
 )
 
-from TraffCOCO.annotation_pipeline.models.ontology.candidate_ranker import (
+from annotation_pipeline.models.ontology.candidate_ranker import (
     CandidateRanker,
 )
 
-from TraffCOCO.annotation_pipeline.models.ontology.ontology_models import (
+from annotation_pipeline.models.ontology.ontology_models import (
     RetrievalQuery,
     OntologySearchResult,
 )

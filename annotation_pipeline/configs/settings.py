@@ -98,6 +98,8 @@ class PathsConfig:
 
     scene_cache: Path
 
+    ontology_cache: Path
+
     pipeline_cache: Path
 
     visualizations: Path
@@ -369,6 +371,8 @@ def _resolve_paths(project_root: Path) -> PathsConfig:
         logs = outputs / "logs",
 
         scene_cache = outputs / "scene_cache",
+
+        ontology_cache = outputs / "ontology_cache",
 
         pipeline_cache = outputs / "pipeline_cache",
 

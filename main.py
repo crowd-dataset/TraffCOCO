@@ -41,6 +41,10 @@ from annotation_pipeline.pipeline.scene_understanding import (
     SceneUnderstandingEngine,
 )
 
+from annotation_pipeline.pipeline.ontology import (
+    OntologyEngine,
+)
+
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
 
@@ -157,6 +161,12 @@ def main() -> None:
                 │
                 ▼
         Scene Understanding
+                │
+                ▼
+        Pipeline Cache
+                │
+                ▼
+        Ontology Reasoning
                 │
                 ▼
         Pipeline Cache
@@ -448,6 +458,90 @@ def main() -> None:
                 logger.info(
                     "Skipping Scene Understanding."
                 )
+
+    # ------------------------------------------------------------------
+    # Ontology Reasoning
+    # ------------------------------------------------------------------
+
+    if config.pipeline.run_ontology_reasoning:
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("ONTOLOGY REASONING")
+        logger.info("=" * 80)
+
+        ontology_engine = OntologyEngine(
+            config=config,
+        )
+
+        total_reasoning_time = 0.0
+
+        total_objects = 0
+
+        for image_path in image_paths:
+
+            try:
+
+                results = ontology_engine.process_images(
+                    image_name=image_path.name,
+                    cache=cache,
+                )
+
+                total_reasoning_time += (
+                    ontology_engine.last_reasoning_time
+                )
+
+                total_objects += (
+                    ontology_engine.last_objects_processed
+                )
+
+                logger.info(
+                    "Ontology completed for '{}'.",
+                    image_path.name,
+                )
+
+                logger.info(
+                    "Retrieved {} ontology prediction(s).",
+                    len(results),
+                )
+
+            except Exception as e:
+
+                logger.error(
+                    "Ontology failed for '{}': {}",
+                    image_path.name,
+                    e,
+                )
+
+                failed_images.append(
+                    (
+                        image_path.name,
+                        "Ontology Reasoning",
+                        str(e),
+                    )
+                )
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("ONTOLOGY SUMMARY")
+        logger.info("=" * 80)
+
+        logger.info(
+            "Objects Processed : {}",
+            total_objects,
+        )
+
+        logger.info(
+            "Total Time : {:.2f} s",
+            total_reasoning_time,
+        )
+
+        if total_objects:
+
+            logger.info(
+                "Average/Object : {:.4f} s",
+                total_reasoning_time / total_objects,
+            )
 
     # ------------------------------------------------------------------
     # Pipeline Complete

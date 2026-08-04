@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from TraffCOCO.annotation_pipeline.models.ontology.ontology_models import OntologyEntry
+from annotation_pipeline.models.ontology.ontology_models import OntologyEntry
 
 
 def build_ontology_entries(

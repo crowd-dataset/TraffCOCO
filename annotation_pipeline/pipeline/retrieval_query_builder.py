@@ -24,7 +24,7 @@ from typing import Any
 
 from custom_logger import CustomLogger
 
-from TraffCOCO.annotation_pipeline.models.ontology.ontology_models import (
+from annotation_pipeline.models.ontology.ontology_models import (
     RetrievalQuery,
 )
 

@@ -287,6 +287,75 @@ class PipelineCache:
                 f"No valid Scene Understanding objects found for '{image_name}'."
             )
 
+    def get_scene_objects(
+        self,
+        image_name: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Return the Scene Understanding objects for a single image.
+        """
+
+        if image_name not in self._cache:
+
+            raise KeyError(
+                f"No cache exists for image '{image_name}'."
+            )
+
+        objects = []
+
+        for object_data in self._cache[image_name].values():
+
+            scene_object = object_data.get(
+                PipelineStage.SCENE_UNDERSTANDING.value,
+                {},
+            )
+
+            if scene_object:
+
+                objects.append(
+                    deepcopy(scene_object)
+                )
+
+        return objects
+
+    def add_ontology_result(
+        self,
+        image_name: str,
+        object_id: int,
+        ontology_result: dict[str, Any],
+    ) -> None:
+        """
+        Store Ontology Reasoning results for an object.
+        """
+
+        if image_name not in self._cache:
+
+            raise KeyError(
+                f"No cache exists for image '{image_name}'."
+            )
+
+        if object_id not in self._cache[image_name]:
+
+            raise KeyError(
+                f"Object {object_id} does not exist for image '{image_name}'."
+            )
+
+        self._cache[
+            image_name
+        ][
+            object_id
+        ][
+            PipelineStage.ONTOLOGY_REASONING.value
+        ] = deepcopy(
+            ontology_result
+        )
+
+        logger.debug(
+            "Stored ontology result for object {} in '{}'.",
+            object_id,
+            image_name,
+        )
+
     def save_image_cache(
         self,
         image_name: str,
