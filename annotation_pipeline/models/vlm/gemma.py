@@ -46,6 +46,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import flash_attn
+
 from transformers import Gemma3ForConditionalGeneration
 
 from custom_logger import CustomLogger
@@ -79,19 +81,19 @@ class GemmaVL(HFVLM):
 
     MODEL_CLASS = Gemma3ForConditionalGeneration
 
-    DEFAULT_DEVICE = "cuda"
-
     DEFAULT_DTYPE = "auto"
 
-    DEFAULT_ATTENTION_IMPLEMENTATION = "eager"
+    DEFAULT_ATTENTION_IMPLEMENTATION = "flash_attention_2"
 
-    DEFAULT_MAX_NEW_TOKENS = 512
+    DEFAULT_MAX_NEW_TOKENS = 3500
 
     DEFAULT_TEMPERATURE = 0.0
 
     DEFAULT_DO_SAMPLE = False
 
-    DEFAULT_SYSTEM_PROMPT = None
+    DEFAULT_QUANTIZATION = "4bit"
+
+    
 
     # -------------------------------------------------------------------------
     # Initialization

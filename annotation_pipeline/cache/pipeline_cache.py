@@ -115,38 +115,93 @@ class PipelineCache:
         obj: dict[str, Any],
     ) -> None:
         """
-        Validate a Scene Understanding object before inserting it into the
-        cache.
+        Validate a Scene Understanding object.
+
+        Supports both output schemas:
+
+        Schema A
+            Vehicles, road users, buses, trucks, motorcycles,
+            bicycles, animals, traffic cones, street lights,
+            gantries, bridges and tunnels.
+
+        Required:
+            object_id
+            observed_object
+            description
+
+        Schema B
+            Traffic signs, traffic signals, road markings,
+            infrastructure, temporary objects,
+            country-specific objects.
+
+        Required:
+            object_id
+            observed_object
+            description
+            object_group
+            visual_attributes
         """
 
-        required_fields = (
+        # ----------------------------------------------------------
+        # Fields required for EVERY object
+        # ----------------------------------------------------------
 
+        common_required = (
             "object_id",
-
             "observed_object",
-
-            "object_group",
-
+            "description",
         )
 
         missing = [
-
             field
-
-            for field in required_fields
-
+            for field in common_required
             if field not in obj
-
         ]
 
         if missing:
 
             raise ValueError(
-
                 f"Missing required fields: {missing}"
-
             )
 
+        # ----------------------------------------------------------
+        # Schema A
+        #
+        # No object_group means this is Schema A.
+        # ----------------------------------------------------------
+
+        if "object_group" not in obj:
+
+            return
+
+        # ----------------------------------------------------------
+        # Schema B
+        # ----------------------------------------------------------
+
+        schema_b_required = (
+            "visual_attributes",
+        )
+
+        missing = [
+            field
+            for field in schema_b_required
+            if field not in obj
+        ]
+
+        if missing:
+
+            raise ValueError(
+                f"Missing Schema-B fields: {missing}"
+            )
+
+        if not isinstance(
+            obj["visual_attributes"],
+            dict,
+        ):
+
+            raise ValueError(
+                "'visual_attributes' must be a dictionary."
+            )
     # ------------------------------------------------------------------
     # Scene Understanding
     # ------------------------------------------------------------------
@@ -166,19 +221,41 @@ class PipelineCache:
 
         inserted = 0
 
+        valid_objects = []
+
         for obj in objects:
 
-            self._validate_object(obj)
+            try:
+
+                self._validate_object(obj)
+
+                valid_objects.append(obj)
+
+            except Exception as exc:
+
+                logger.warning(
+                    "Skipping invalid object:\n{}",
+                    json.dumps(
+                        obj,
+                        indent=4,
+                        ensure_ascii=False,
+                    ),
+                )
+
+                logger.warning(
+                    "{}",
+                    exc,
+                )
+
+        for obj in valid_objects:
 
             object_id = int(obj["object_id"])
 
             if object_id in self._cache[image_name]:
 
                 raise ValueError(
-
                     f"Duplicate object_id {object_id} "
                     f"for image '{image_name}'."
-
                 )
 
             self._cache[image_name][object_id] = {
@@ -204,15 +281,11 @@ class PipelineCache:
 
             inserted += 1
 
-        logger.info(
+        if inserted == 0:
 
-            "Cached {} object(s) for '{}'.",
-
-            inserted,
-
-            image_name,
-
-        )
+            raise ValueError(
+                f"No valid Scene Understanding objects found for '{image_name}'."
+            )
 
     def save_image_cache(
         self,

@@ -414,3 +414,5 @@ IMPORTANT RULES
 10. Focus only on traffic-related objects including road users, vehicles, traffic signs, traffic signals, road markings, infrastructure, temporary traffic objects, animals, and country-specific traffic objects.
 
 11. The description should be detailed enough that a human traffic engineer or a Knowledge Graph retrieval model could identify the correct ontology entry based solely on the description.
+
+12. Continue listing objects until every visible traffic-related object has been described.Do not stop after the first few objects.

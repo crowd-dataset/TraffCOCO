@@ -35,6 +35,7 @@ from annotation_pipeline.models.vlm.model_loader import (
 from annotation_pipeline.utils.image_utils import (
     discover_images,
 )
+from annotation_pipeline.utils.gpu_monitor import GPUMonitor
 
 from annotation_pipeline.pipeline.scene_understanding import (
     SceneUnderstandingEngine,
@@ -248,6 +249,18 @@ def main() -> None:
 
     cache = PipelineCache()
 
+    monitor = GPUMonitor(
+        output_dir=config.paths.outputs,
+    )
+
+    monitor.start()
+
+    total_generation_time = 0.0
+
+    total_generated_tokens = 0
+
+    total_images = 0
+
 
     # ------------------------------------------------------------------
     # Scene Understanding
@@ -305,61 +318,77 @@ def main() -> None:
         # Process Images
         # --------------------------------------------------------------
 
+        BATCH_SIZE = config.pipeline.batch_size
+
         try:
 
-            for index, image_path in enumerate(
-                image_paths,
-                start=1,
-            ):
+            for batch_start in range(0, len(image_paths), BATCH_SIZE):
+
+                batch = image_paths[
+                    batch_start : batch_start + BATCH_SIZE
+                ]
 
                 logger.info("")
                 logger.info("=" * 80)
                 logger.info(
-                    "Processing image {}/{} : {}",
-                    index,
+                    "Processing batch {}-{} of {} ({} image(s))",
+                    batch_start + 1,
+                    min(batch_start + len(batch), len(image_paths)),
                     len(image_paths),
-                    image_path.name,
+                    len(batch),
                 )
                 logger.info("=" * 80)
 
                 try:
 
-                    objects = engine.process_image(
-                        image_path=image_path,
+                    objects_per_image = engine.process_images(
+                        image_paths=batch,
                         cache=cache,
                     )
 
-                    logger.info(
-                        "Detected {} traffic object(s).",
-                        len(objects),
-                    )
+                    total_generation_time += engine.last_generation_time
 
-                    logger.debug(
-                        "Parsed Scene Understanding JSON:\n{}",
-                        json.dumps(
-                            objects,
-                            indent=4,
-                            ensure_ascii=False,
-                        ),
-                    )
+                    total_generated_tokens += engine.last_generated_tokens
+
+                    total_images += len(batch)
+
+                    for image_path, objects in zip(
+                        batch,
+                        objects_per_image,
+                    ):
+
+                        logger.info(
+                            "Detected {} traffic object(s) in '{}'.",
+                            len(objects),
+                            image_path.name,
+                        )
+
+                        logger.debug(
+                            "Parsed Scene Understanding JSON for '{}':\n{}",
+                            image_path.name,
+                            json.dumps(
+                                objects,
+                                indent=4,
+                                ensure_ascii=False,
+                            ),
+                        )
 
                 except Exception as e:
 
                     logger.error(
-                        "Failed to process '{}': {}",
-                        image_path.name,
+                        "Batch failed: {}",
                         e,
                     )
 
-                    failed_images.append(
-                        (
-                            image_path.name,
-                            "Scene Understanding",
-                            str(e),
-                        )
-                    )
+                    for image_path in batch:
 
-                    continue
+                        failed_images.append(
+                            (
+                                image_path.name,
+                                "Scene Understanding",
+                                str(e),
+                            )
+                        )
 
         finally:
 
@@ -367,13 +396,58 @@ def main() -> None:
                 "Unloading Scene Understanding model."
             )
 
+            monitor.stop()
+
+            monitor.save()
+
             model.unload()
 
-    else:
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("SCENE UNDERSTANDING SUMMARY")
+            logger.info("=" * 80)
 
-        logger.info(
-            "Skipping Scene Understanding."
-        )
+            logger.info(
+                "Images Processed      : {}",
+                total_images,
+            )
+
+            logger.info(
+                "Total Generation Time : {:.2f} s",
+                total_generation_time,
+            )
+
+            if total_images:
+
+                logger.info(
+                    "Average/Image        : {:.2f} s",
+                    total_generation_time / total_images,
+                )
+
+                logger.info(
+                    "Images/Hour          : {:.2f}",
+                    (3600 * total_images)
+                    / total_generation_time,
+                )
+
+            logger.info(
+                "Generated Tokens      : {}",
+                total_generated_tokens,
+            )
+
+            if total_generation_time:
+
+                logger.info(
+                    "Tokens/sec           : {:.2f}",
+                    total_generated_tokens
+                    / total_generation_time,
+                )
+
+            else:
+
+                logger.info(
+                    "Skipping Scene Understanding."
+                )
 
     # ------------------------------------------------------------------
     # Pipeline Complete

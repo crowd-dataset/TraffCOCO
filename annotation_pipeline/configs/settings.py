@@ -150,6 +150,7 @@ class ModelsConfig:
     """
 
     scene_understanding_backend: str
+    scene_understanding_prompt : str
     grounding_backend: str
     segmentation_backend: str
 
@@ -251,6 +252,7 @@ class PipelineParams:
     save_visualizations: bool
 
     num_images: int
+    batch_size: int
     interval_seconds: int
 
     confidence_threshold: float
@@ -345,7 +347,7 @@ def _resolve_paths(project_root: Path) -> PathsConfig:
     )
     outputs = project_root / "annotation_pipeline" / "outputs"
 
-    ontology_root = project_root/ "annotation_pipeline"/ "ontology"
+    ontology_root = project_root/ "annotation_pipeline"/ "models" / "ontology"
     
     paths = PathsConfig(
         project_root=project_root,
@@ -465,6 +467,8 @@ def load_config(
 
         scene_understanding_backend=raw["scene_understanding_backend"],
 
+        scene_understanding_prompt=raw["scene_understanding_prompt"],
+
         grounding_backend=raw["grounding_backend"],
 
         segmentation_backend=raw["segmentation_backend"],
@@ -511,6 +515,7 @@ def load_config(
         save_visualizations=raw["save_visualizations"],
 
         num_images=raw["num_images"],
+        batch_size=raw["batch_size"],
         interval_seconds=raw["interval_seconds"],
 
         confidence_threshold=raw["confidence_threshold"],

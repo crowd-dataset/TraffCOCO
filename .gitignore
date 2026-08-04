@@ -221,3 +221,6 @@ outputs
 #generated model files
 *.pkl
 *.index
+
+#tests
+tests/

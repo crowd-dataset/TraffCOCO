@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 from annotation_pipeline.configs.settings import load_config
-
+from PIL import Image
 from custom_logger import CustomLogger
 
 logger = CustomLogger(__name__)
@@ -127,6 +127,46 @@ def get_image_dimensions(path: Path | str) -> tuple[int, int]:
     h, w = img.shape[:2]
     return w, h
 
+
+def load_pil_image(
+    path: Path | str,
+    max_size: int | None = None,
+) -> Image.Image:
+    """
+    Load an image as a PIL RGB image.
+
+    Parameters
+    ----------
+    path
+        Path to the image.
+
+    max_size
+        Maximum width/height while preserving aspect ratio.
+        If None, the original resolution is kept.
+    """
+
+    path = Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Image file not found: {path}")
+
+    image = Image.open(path).convert("RGB")
+
+    if max_size is not None:
+
+        image.thumbnail(
+            (max_size, max_size),
+            Image.Resampling.LANCZOS,
+        )
+
+        logger.debug(
+            "Resized '{}' to {}x{}.",
+            path.name,
+            image.width,
+            image.height,
+        )
+
+    return image
 # ===========================================================================
 # Test Function
 # ===========================================================================

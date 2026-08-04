@@ -51,6 +51,7 @@ import gc
 from custom_logger import CustomLogger
 from pathlib import Path
 from typing import Any
+import time
 
 import torch
 from PIL import Image
@@ -137,6 +138,16 @@ class HFVLM(BaseVLM):
 
         self.do_sample = self.DEFAULT_DO_SAMPLE
 
+        # ----------------------------------------------------------
+        # Benchmark statistics
+        # ----------------------------------------------------------
+
+        self.last_generation_time = 0.0
+
+        self.last_generated_tokens = 0
+
+        self.last_total_tokens = 0
+
         logger.debug(
             "Initialized Hugging Face backend '{}'.",
             self.model_id,
@@ -147,107 +158,134 @@ class HFVLM(BaseVLM):
     # Loading
     # ------------------------------------------------------------------
 
-    def load(self):
+    def load(self) -> None:
         """
-        Load the configured Hugging Face Vision-Language Model.
+        Load the Hugging Face Vision-Language Model.
 
-        The loading procedure initializes:
-
-        • Processor
-        • Tokenizer
-        • Model weights
-        • Quantization configuration
-        • Attention implementation
-
-        The model is placed on the configured execution device and switched
-        to evaluation mode.
+        This implementation follows the benchmark implementation exactly.
         """
-        logger.info(
-            "Loading Hugging Face model '{}'.",
-            self.model_id,
-        )
 
-        if self.MODEL_CLASS is None:
-            raise RuntimeError(
-                f"{self.__class__.__name__} must define MODEL_CLASS."
+        if self.loaded:
+            logger.debug(
+                "Model '{}' already loaded.",
+                self.model_id,
             )
+            return
 
-        logger.info("Loading {} ...", self.model_id)
+        logger.info("=" * 80)
+        logger.info("LOADING MODEL")
+        logger.info("=" * 80)
+
+        # ----------------------------------------------------------
+        # Processor
+        # ----------------------------------------------------------
 
         self.processor = AutoProcessor.from_pretrained(
             self.model_id,
-            trust_remote_code=self.trust_remote_code,
-        )
-        logger.debug(
-            "Processor loaded successfully."
-        )
-        logger.debug(
-            "Preparing model loading arguments."
+            use_fast=True,
         )
 
-        model_kwargs = {
-            "trust_remote_code": self.trust_remote_code,
-            "device_map": "auto",
-            "attn_implementation": self.attention,
-        }
-
-        # --------------------------------------------------------------
+        # ----------------------------------------------------------
         # Quantization
-        # --------------------------------------------------------------
+        # ----------------------------------------------------------
 
-        if self.quantization is None:
+        quantization_config = None
 
-            model_kwargs["dtype"] = self.dtype
-            logger.debug(
-                "Using dtype '{}'.",
-                self.dtype,
+        if self.quantization == "4bit":
+
+            logger.info(
+                "Using 4-bit quantization."
             )
 
-        elif self.quantization == "4bit":
-
-            logger.info("Using 4-bit quantization.")
-
-            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
-                bnb_4bit_compute_dtype=self.dtype,
-                bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
             )
 
         elif self.quantization == "8bit":
 
-            logger.info("Using 8-bit quantization.")
+            logger.info(
+                "Using 8-bit quantization."
+            )
 
-            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            quantization_config = BitsAndBytesConfig(
                 load_in_8bit=True,
             )
 
-        else:
+        # ----------------------------------------------------------
+        # Model
+        # ----------------------------------------------------------
 
-            raise ValueError(
-                f"Unsupported quantization: {self.quantization}"
-            )
-        logger.info(
-            "Loading model weights..."
-        )
         self.model = self.MODEL_CLASS.from_pretrained(
             self.model_id,
-            **model_kwargs,
+            device_map="auto",
+            quantization_config=quantization_config,
+            torch_dtype=torch.bfloat16,
+            attn_implementation=self.attention,
         )
-        logger.debug(
-            "Switching model to evaluation mode."
-        )
+
         self.model.eval()
+
+        # ----------------------------------------------------------
+        # Debug
+        # ----------------------------------------------------------
+
+        logger.info("=" * 80)
+        logger.info("MODEL CONFIG")
+        logger.info("=" * 80)
+
+        try:
+
+            logger.info(
+                "Device      : {}",
+                self.model.device,
+            )
+
+        except Exception:
+
+            logger.info(
+                "Device      : <device_map>"
+            )
+
+        logger.info(
+            "Quantized   : {}",
+            hasattr(
+                self.model,
+                "hf_quantizer",
+            ),
+        )
+
+        logger.info(
+            "Attention   : {}",
+            self.model.config._attn_implementation,
+        )
+
+        logger.info(
+            "GPU Allocated : {:.2f} GB",
+            torch.cuda.memory_allocated() / 1024**3,
+        )
+
+        logger.info(
+            "GPU Reserved  : {:.2f} GB",
+            torch.cuda.memory_reserved() / 1024**3,
+        )
+
+        logger.info(
+            "HF Device Map:"
+        )
+
+        logger.info(
+            "{}",
+            self.model.hf_device_map,
+        )
 
         self.loaded = True
 
         logger.info(
-            "Successfully loaded '{}'.",
+            "'{}' loaded successfully.",
             self.model_id,
-        )
-        logger.info(
-            "Model dtype: {}",
-            next(self.model.parameters()).dtype,
         )
     # ------------------------------------------------------------------
     # Unload
@@ -284,107 +322,84 @@ class HFVLM(BaseVLM):
 
     def infer(
         self,
-        image_path: Path,
+        image_paths: list[Path] | Path,
         prompt: str,
-    ) -> str:
+    ):
+        if isinstance(image_paths, Path):
+
+            image_paths = [image_paths]
+
         logger.info(
-            "Running Scene Understanding inference on '{}'.",
-            image_path.name,
+            "Running Scene Understanding on {} image(s).",
+            len(image_paths),
         )
+
         if not self.loaded:
+
             raise RuntimeError(
                 "Model has not been loaded."
             )
 
-        image = Image.open(image_path).convert("RGB")
-        logger.debug(
-            "Loaded image '{}'.",
-            image_path.name,
+        logger.info(
+            "Images in batch: {}",
+            ", ".join(path.name for path in image_paths),
         )
-        messages = self.build_messages(
-            image=image,
+
+        inputs = self._prepare_inputs(
+            image_paths=image_paths,
             prompt=prompt,
         )
-        logger.debug(
-            "Constructed multimodal prompt."
+
+        generated, generation_time = self._generate(
+            inputs,
         )
-        chat_prompt = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
+
+        responses = self._decode(
+            generated,
         )
-        logger.debug(
-            "Applied Hugging Face chat template."
-        )
-        inputs = self.processor(
-            images=image,
-            text=chat_prompt,
-            return_tensors="pt",
-        )
-        logger.debug(
-            "Prepared model inputs."
-        )
-        inputs = {
-            k: v.to(self.model.device)
-            for k, v in inputs.items()
-        }
-        for k, v in inputs.items():
-            if torch.is_tensor(v):
-                logger.info("{} -> device={}, dtype={}", k, v.device, v.dtype)
 
-        with torch.no_grad():
-            logger.info(
-                "Generating scene description..."
-            )
-            generate_kwargs = {
-                "max_new_tokens": self.max_new_tokens,
-                "do_sample": self.do_sample,
-            }
+        self.last_generation_time = generation_time
 
-            # Only use temperature when sampling
-            if self.do_sample:
-                generate_kwargs["temperature"] = self.temperature
+        self.last_generated_tokens = generated.shape[1]
 
-            # Reduce repetition
-            generate_kwargs["repetition_penalty"] = 1.15
-            generate_kwargs["no_repeat_ngram_size"] = 3
+        self.last_total_tokens = generated.numel()
 
-            outputs = self.model.generate(
-                **inputs,
-                **generate_kwargs,
-            )
-
-        input_length = inputs["input_ids"].shape[1]
-
-        generated_ids = outputs[:, input_length:]
-
-        response = self.processor.batch_decode(
-            generated_ids,
-            skip_special_tokens=True,
-        )[0]
         logger.info(
-            "Model inference completed."
+            "Generation Time : {:.2f} s",
+            generation_time,
         )
-        logger.info("=" * 80)
-        logger.info("RAW MODEL OUTPUT")
-        logger.info("=" * 80)
+
+        logger.info(
+            "Generated Tokens : {}",
+            generated.shape[1],
+        )
+
         logger.info(
             "{}",
-            response,
+            responses,
         )
-        logger.info("=" * 80)
 
-        return response.strip()
+        return {
+
+            "responses": responses,
+
+            "generation_time": generation_time,
+
+            "generated_tokens": generated.shape[1],
+
+            "total_tokens": generated.numel(),
+
+        }
 
     # ------------------------------------------------------------------
     # Prompt Builder
     # ------------------------------------------------------------------
-
-    def build_messages(
+    
+    def _prepare_inputs(
         self,
-        image: Any,
+        image_paths: Path,
         prompt: str,
-    ) -> list:
+    ):
         """
         Construct the default multimodal conversation.
 
@@ -395,16 +410,18 @@ class HFVLM(BaseVLM):
         Models requiring a different conversation format should override
         this method.
         """
-        logger.debug(
-            "Building default multimodal conversation."
-        )
-        return [
+
+        images = [
+            [Image.open(path).convert("RGB")]
+            for path in image_paths
+        ]
+
+        messages = [
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "image",
-                        "image": image,
                     },
                     {
                         "type": "text",
@@ -413,3 +430,78 @@ class HFVLM(BaseVLM):
                 ],
             }
         ]
+
+        chat_prompt = self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        prompts = [chat_prompt] * len(images)
+
+        inputs = self.processor(
+
+            text=prompts,
+
+            images=images,
+
+            padding=True,
+
+            return_tensors="pt",
+
+        )
+
+        device = self.model.get_input_embeddings().weight.device
+
+        inputs = {
+            k: v.to(device)
+            for k, v in inputs.items()
+        }
+
+        return inputs
+
+    def _generate(
+        self,
+        inputs,
+    ):
+        """
+        Execute model.generate() exactly as in benchmark.
+        """
+
+        start = time.perf_counter()
+
+        with torch.no_grad():
+
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=self.do_sample,
+                use_cache=True,
+                pad_token_id=self.processor.tokenizer.eos_token_id,
+            )
+
+        generation_time = time.perf_counter() - start
+
+        input_len = inputs["input_ids"].shape[1]
+
+        generated = outputs[:, input_len:]
+
+        return (
+            generated,
+            generation_time,
+        )
+
+
+    def _decode(
+        self,
+        generated,
+    ):
+        """
+        Decode benchmark output.
+        """
+
+        responses = self.processor.batch_decode(
+            generated,
+            skip_special_tokens=True,
+        )
+
+        return responses

@@ -62,7 +62,7 @@ class SceneUnderstandingEngine:
         self.model = model
 
         self.scene_prompt = load_prompt(
-            "smolvlm+prompt.txt",
+            config.models.scene_understanding_prompt,
             prompts_dir=config.paths.prompts,
         )
 
@@ -71,80 +71,85 @@ class SceneUnderstandingEngine:
             model.model_name,
         )
 
+        # --------------------------------------------------------------
+        # Benchmark Statistics
+        # --------------------------------------------------------------
+
+        self.last_generation_time = 0.0
+
+        self.last_generated_tokens = 0
+
+        self.last_total_tokens = 0
+
     # ------------------------------------------------------------------
     # Main API
     # ------------------------------------------------------------------
 
-    def process_image(
+    def process_images(
         self,
-        image_path: Path | str,
+        image_paths: list[Path],
         cache: PipelineCache,
     ) -> list[dict[str, Any]]:
 
-        image_path = Path(image_path)
+        # --------------------------------------------------------------
+        # Accept single image
+        # --------------------------------------------------------------
 
-        if not image_path.exists():
+        if isinstance(image_paths, Path):
+            image_paths = [image_paths]
 
-            raise FileNotFoundError(
-                f"Image not found: {image_path}"
-            )
+        # --------------------------------------------------------------
+        # Validate images
+        # --------------------------------------------------------------
 
-        image_name = image_path.name
+        for image_path in image_paths:
+
+            if not image_path.exists():
+
+                raise FileNotFoundError(
+                    f"Image not found: {image_path}"
+                )
 
         logger.info(
-            "Running Scene Understanding for '{}'...",
-            image_name,
+            "Running Scene Understanding for {} image(s)...",
+            len(image_paths),
         )
 
         # --------------------------------------------------------------
-        # Model inference
+        # Run VLM (batch inference)
         # --------------------------------------------------------------
 
-        raw_response = self._generate_scene_description(
-            image_path=image_path,
-        )
-        if self.config.pipeline.save_raw_outputs:
-
-            raw_dir = Path(
-                os.path.join(
-                    str(self.config.paths.scene_cache),
-                    "raw",
-                )
-            )
-            raw_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            raw_file = Path(
-                os.path.join(
-                    str(raw_dir),
-                    f"{image_path.stem}.txt",
-                )
-            )
-
-            raw_file.write_text(
-                raw_response,
-                encoding="utf-8",
-            )
-
-            logger.info(
-                "Saved raw model output to '{}'.",
-                raw_file,
-            )
-        # --------------------------------------------------------------
-        # Parse JSON
-        # --------------------------------------------------------------
-
-        objects = self._parse_json_response(
-            raw_response,
+        result = self.model.infer(
+            image_paths=image_paths,
+            prompt=self.scene_prompt,
         )
 
-        parsed_dir = Path(
-            os.path.join(
-                str(self.config.paths.scene_cache),
-                "parsed",
-            )
+        responses = result["responses"]
+
+        self.last_generation_time = result["generation_time"]
+        self.last_generated_tokens = result["generated_tokens"]
+        self.last_total_tokens = result["total_tokens"]
+
+        logger.info(
+            "Generation Time : {:.2f} s",
+            self.last_generation_time,
+        )
+
+        logger.info(
+            "Generated Tokens : {}",
+            self.last_generated_tokens,
+        )
+
+        # --------------------------------------------------------------
+        # Output directories
+        # --------------------------------------------------------------
+
+        raw_dir = self.config.paths.scene_cache / "raw"
+        parsed_dir = self.config.paths.scene_cache / "parsed"
+
+        raw_dir.mkdir(
+            parents=True,
+            exist_ok=True,
         )
 
         parsed_dir.mkdir(
@@ -152,108 +157,172 @@ class SceneUnderstandingEngine:
             exist_ok=True,
         )
 
-        parsed_file = Path(
-            os.path.join(
-                str(parsed_dir),
-                f"{image_path.stem}.json",
-            )
-        )
-
-        with open(
-            parsed_file,
-            "w",
-            encoding="utf-8",
-        ) as f:
-
-            json.dump(
-                objects,
-                f,
-                indent=4,
-                ensure_ascii=False,
-            )
-
-        logger.info(
-            "Saved parsed scene output to '{}'.",
-            parsed_file,
-        )
-
-        logger.info(
-            "Parsed {} object(s).",
-            len(objects),
-        )
-
         # --------------------------------------------------------------
-        # Limit object count
+        # Process every image
         # --------------------------------------------------------------
 
-        max_objects = self.config.pipeline.max_objects_per_image
+        all_objects = []
 
-        if len(objects) > max_objects:
+        for image_path, raw_response in zip(image_paths, responses):
 
-            logger.warning(
-                "Model returned {} objects. Truncating to {}.",
+            image_name = image_path.name
+
+            # ----------------------------------------------------------
+            # Save raw output
+            # ----------------------------------------------------------
+
+            if self.config.pipeline.save_raw_outputs:
+
+                raw_file = raw_dir / f"{image_path.stem}.txt"
+
+                raw_file.write_text(
+                    raw_response,
+                    encoding="utf-8",
+                )
+
+                logger.info(
+                    "Saved raw model output to '{}'.",
+                    raw_file,
+                )
+
+            # ----------------------------------------------------------
+            # Parse JSON
+            # ----------------------------------------------------------
+
+            objects = self._parse_json_response(
+                raw_response,
+            )
+
+            parsed_file = parsed_dir / f"{image_path.stem}.json"
+
+            with open(
+                parsed_file,
+                "w",
+                encoding="utf-8",
+            ) as f:
+
+                json.dump(
+                    objects,
+                    f,
+                    indent=4,
+                    ensure_ascii=False,
+                )
+
+            logger.info(
+                "Saved parsed scene output to '{}'.",
+                parsed_file,
+            )
+
+            logger.info(
+                "Parsed {} object(s).",
                 len(objects),
-                max_objects,
             )
 
-            objects = objects[:max_objects]
+            # ----------------------------------------------------------
+            # Limit object count
+            # ----------------------------------------------------------
 
-        # --------------------------------------------------------------
-        # Cache
-        # --------------------------------------------------------------
+            max_objects = self.config.pipeline.max_objects_per_image
 
-        cache.add_scene_objects(
-            image_name=image_name,
-            objects=objects,
-        )
+            if len(objects) > max_objects:
 
-        if self.config.pipeline.save_intermediate_cache:
+                logger.warning(
+                    "Model returned {} objects. Truncating to {}.",
+                    len(objects),
+                    max_objects,
+                )
 
-            cache.save_image_cache(
+                objects = objects[:max_objects]
+
+            # ----------------------------------------------------------
+            # Cache
+            # ----------------------------------------------------------
+
+            cache.add_scene_objects(
                 image_name=image_name,
-                directory=self.config.paths.scene_cache,
-                stage="scene_understanding",
+                objects=objects,
             )
 
-        logger.info(
-            "Scene Understanding completed for '{}'.",
-            image_name,
-        )
+            if self.config.pipeline.save_intermediate_cache:
 
-        return objects
+                cache.save_image_cache(
+                    image_name=image_name,
+                    directory=self.config.paths.scene_cache,
+                    stage="scene_understanding",
+                )
 
-    # ------------------------------------------------------------------
-    # Model
-    # ------------------------------------------------------------------
+            logger.info(
+                "Scene Understanding completed for '{}'.",
+                image_name,
+            )
 
-    def _generate_scene_description(
+            all_objects.append(objects)
+
+        return all_objects
+
+    # -------------------------------------------------------------------------
+    # Normalizing
+    # -------------------------------------------------------------------------
+
+    def _normalize_objects(
         self,
-        image_path: Path,
-    ) -> str:
-        """
-        Execute the configured Vision-Language Model.
-        """
+        objects: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
 
-        logger.debug(
-            "Running {}.",
-            self.model.model_name,
-        )
+        normalized = []
 
-        try:
+        for i, obj in enumerate(objects):
 
-            return self.model.infer(
-                image_path=image_path,
-                prompt=self.scene_prompt,
-            )
+            if not isinstance(obj, dict):
+                continue
 
-        except Exception as exc:
-            
+            # -------------------------------------------------
+            # object_id
+            # -------------------------------------------------
 
-            logger.error("{}", traceback.format_exc())
+            obj.setdefault("object_id", i + 1)
 
-            raise RuntimeError(
-                "Scene Understanding model failed."
-            ) from exc
+            # -------------------------------------------------
+            # observed_object
+            # -------------------------------------------------
+
+            if "observed_object" not in obj:
+
+                if "object" in obj:
+                    obj["observed_object"] = obj.pop("object")
+
+                elif "name" in obj:
+                    obj["observed_object"] = obj.pop("name")
+
+                elif "label" in obj:
+                    obj["observed_object"] = obj.pop("label")
+
+            # -------------------------------------------------
+            # description
+            # -------------------------------------------------
+
+            obj.setdefault("description", "")
+
+            # -------------------------------------------------
+            # Schema B
+            # -------------------------------------------------
+
+            if "object_group" in obj:
+
+                obj.setdefault("visual_attributes", {})
+
+            if "observed_object" not in obj:
+
+                logger.warning(
+                    "Object {} still missing observed_object:\n{}",
+                    obj.get("object_id", "?"),
+                    json.dumps(obj, indent=4, ensure_ascii=False),
+                )
+
+            normalized.append(obj)
+
+        return normalized
+
     # -------------------------------------------------------------------------
     # JSON Parsing
     # -------------------------------------------------------------------------
@@ -405,5 +474,7 @@ class SceneUnderstandingEngine:
             "Successfully parsed {} scene object(s).",
             len(objects),
         )
+
+        objects = self._normalize_objects(objects)
 
         return objects

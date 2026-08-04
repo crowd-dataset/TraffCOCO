@@ -30,7 +30,7 @@ from custom_logger import CustomLogger
 
 from annotation_pipeline.configs.settings import PipelineConfig
 
-from annotation_pipeline.ontology.ontology_models import (
+from TraffCOCO.annotation_pipeline.models.ontology.ontology_models import (
     CandidateMatch,
     RetrievalQuery,
 )
