@@ -247,7 +247,7 @@ class SceneUnderstandingEngine:
 
                 cache.save_image_cache(
                     image_name=image_name,
-                    directory=self.config.paths.scene_cache,
+                    directory=self.config.paths.pipeline_cache,
                     stage="scene_understanding",
                 )
 

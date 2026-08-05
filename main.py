@@ -23,6 +23,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+import torch
+import time
 
 from custom_logger import CustomLogger
 from logmod import logs
@@ -186,6 +188,11 @@ def main() -> None:
         program_name="vlm_first_pipeline",
         path=config.paths.logs,
     )
+    config = load_config()
+
+    pipeline_start = time.perf_counter()
+
+    config.paths.ensure_output_dirs()
 
     logger.info("=" * 80)
     logger.info("VLM-First Pipeline")
@@ -347,6 +354,19 @@ def main() -> None:
                     len(image_paths),
                     len(batch),
                 )
+                logger.info(
+                    "GPU BEFORE BATCH"
+                )
+
+                logger.info(
+                    "Allocated : {} GB",
+                    round(torch.cuda.memory_allocated() / 1024**3, 2),
+                )
+
+                logger.info(
+                    "Reserved : {} GB",
+                    round(torch.cuda.memory_reserved() / 1024**3, 2),
+                )
                 logger.info("=" * 80)
 
                 try:
@@ -406,9 +426,7 @@ def main() -> None:
                 "Unloading Scene Understanding model."
             )
 
-            monitor.stop()
-
-            monitor.save()
+            
 
             model.unload()
 
@@ -546,7 +564,52 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Pipeline Complete
     # ------------------------------------------------------------------
+    monitor.stop()
+    
+    monitor.save()
+    pipeline_time = time.perf_counter() - pipeline_start
 
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("PIPELINE SUMMARY")
+    logger.info("=" * 80)
+
+    logger.info(
+        "Images Processed      : {}",
+        total_images,
+    )
+
+    logger.info(
+        "Objects Processed     : {}",
+        total_objects,
+    )
+
+    logger.info(
+        "Scene Time            : {:.2f} s",
+        total_generation_time,
+    )
+
+    logger.info(
+        "Ontology Time         : {:.2f} s",
+        total_reasoning_time,
+    )
+
+    logger.info(
+        "Total Pipeline Time   : {:.2f} s",
+        pipeline_time,
+    )
+
+    if total_images:
+
+        logger.info(
+            "Average/Image        : {:.2f} s",
+            pipeline_time / total_images,
+        )
+
+        logger.info(
+            "Images/Hour          : {:.2f}",
+            3600 * total_images / pipeline_time,
+        )
     logger.info("")
     logger.info("=" * 80)
     logger.info("VLM-First Pipeline Complete")

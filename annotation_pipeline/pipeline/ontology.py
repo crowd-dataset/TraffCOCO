@@ -137,15 +137,6 @@ class OntologyEngine:
         )
 
         # ----------------------------------------------------------
-        # Rebuild PipelineCache from parsed Scene Understanding
-        # ----------------------------------------------------------
-
-        cache.add_scene_objects(
-            image_name=image_name,
-            objects=scene_objects,
-        )
-
-        # ----------------------------------------------------------
         # Ontology Reasoning
         # ----------------------------------------------------------
 
@@ -173,6 +164,10 @@ class OntologyEngine:
             )
 
             ontology_results.append(result)
+
+            # ------------------------------------------------------
+            # Update existing PipelineCache object
+            # ------------------------------------------------------
 
             cache.add_ontology_result(
                 image_name=image_name,

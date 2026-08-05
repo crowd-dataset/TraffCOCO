@@ -146,27 +146,28 @@ class RetrievalQueryBuilder:
         scene_object: dict[str, Any],
     ) -> str:
         """
-        Extract object name.
+        Extract observed object name.
         """
 
         return scene_object.get(
-            "object_name",
+            "observed_object",
             "",
         )
-
 
     @staticmethod
     def _get_object_group(
         scene_object: dict[str, Any],
     ) -> str:
         """
-        Extract object group.
+        Extract object group from Schema B.
 
-        The current Scene Understanding output does not provide an
-        explicit object group, so return an empty string.
+        Schema A objects simply return an empty string.
         """
 
-        return ""
+        return scene_object.get(
+            "object_group",
+            "",
+        )
 
 
     @staticmethod
@@ -220,58 +221,32 @@ class RetrievalQueryBuilder:
     def _get_primary_color(
         scene_object: dict[str, Any],
     ) -> str:
-        """
-        Extract primary color.
-        """
 
         visual = scene_object.get(
             "visual_attributes",
             {},
         )
 
-        colors = [
-            color.strip()
-            for color in visual.get(
-                "color",
-                "",
-            ).split(",")
-            if color.strip()
-        ]
-
-        if colors:
-
-            return colors[0]
-
-        return ""
+        return visual.get(
+            "primary_color",
+            "",
+        )
 
 
     @staticmethod
     def _get_secondary_color(
         scene_object: dict[str, Any],
     ) -> str:
-        """
-        Extract secondary color.
-        """
 
         visual = scene_object.get(
             "visual_attributes",
             {},
         )
 
-        colors = [
-            color.strip()
-            for color in visual.get(
-                "color",
-                "",
-            ).split(",")
-            if color.strip()
-        ]
-
-        if len(colors) >= 2:
-
-            return colors[1]
-
-        return ""
+        return visual.get(
+            "secondary_color",
+            "",
+        )
 
 
     @staticmethod
@@ -300,9 +275,6 @@ class RetrievalQueryBuilder:
     def _get_text(
         scene_object: dict[str, Any],
     ) -> str:
-        """
-        Extract visible text or symbol information.
-        """
 
         visual = scene_object.get(
             "visual_attributes",
@@ -310,7 +282,7 @@ class RetrievalQueryBuilder:
         )
 
         return visual.get(
-            "text_or_symbol",
+            "text",
             "",
         )
 
@@ -322,14 +294,10 @@ class RetrievalQueryBuilder:
         scene_object: dict[str, Any],
     ) -> str:
         """
-        Extract a symbolic icon or traffic pictogram from the combined
-        text_or_symbol field.
+        Extract a symbolic icon or traffic pictogram.
 
-        Works for:
-        - Unicode arrows (↑ ↓ ← → ↖ ↗ ↘ ↙)
-        - Traffic symbols (P, H, M, BUS, TAXI, etc.)
-        - Common icon keywords (pedestrian, bicycle, parking, hospital...)
-        - Returns an empty string if no symbol is found.
+        Supports the new parser schema while retaining the previous
+        normalization logic.
         """
 
         visual = scene_object.get(
@@ -337,10 +305,22 @@ class RetrievalQueryBuilder:
             {},
         )
 
+        # -------------------------------------------------------------
+        # Prefer the explicit symbol field from the parser
+        # -------------------------------------------------------------
+
         text = visual.get(
-            "text_or_symbol",
+            "symbol",
             "",
         )
+
+        # Fall back to OCR text if symbol is empty
+        if not text:
+
+            text = visual.get(
+                "text",
+                "",
+            )
 
         if not text:
             return ""
@@ -350,6 +330,7 @@ class RetrievalQueryBuilder:
         # -------------------------------------------------------------
         # 1. Unicode traffic symbols
         # -------------------------------------------------------------
+
         unicode_symbols = re.findall(
             r"[↑↓←→↖↗↘↙↔↕⟲⟳⇧⇩⇦⇨⇪⇵⚠🚸🚳🚲🚶🅿ⓅⓂ]",
             text,
@@ -361,6 +342,7 @@ class RetrievalQueryBuilder:
         # -------------------------------------------------------------
         # 2. Single-letter traffic icons
         # -------------------------------------------------------------
+
         letter_match = re.search(
             r"\b(P|H|M|T|E)\b",
             text,
@@ -371,13 +353,13 @@ class RetrievalQueryBuilder:
             return letter_match.group(1).upper()
 
         # -------------------------------------------------------------
-        # 3. Common traffic symbol keywords
+        # 3. Common traffic symbols
         # -------------------------------------------------------------
+
         lower = text.lower()
 
         symbol_keywords = [
 
-            # Direction arrows
             "upward arrow",
             "downward arrow",
             "left arrow",
@@ -390,7 +372,6 @@ class RetrievalQueryBuilder:
             "u-turn",
             "roundabout",
 
-            # Road users
             "pedestrian",
             "walking person",
             "bicycle",
@@ -400,7 +381,6 @@ class RetrievalQueryBuilder:
             "tram",
             "taxi",
 
-            # Services
             "parking",
             "hospital",
             "airport",
@@ -410,7 +390,6 @@ class RetrievalQueryBuilder:
             "telephone",
             "camera",
 
-            # Misc
             "wheelchair",
             "children",
             "school",
@@ -419,10 +398,15 @@ class RetrievalQueryBuilder:
         ]
 
         for keyword in symbol_keywords:
+
             if keyword in lower:
                 return keyword
 
-        return ""
+        # -------------------------------------------------------------
+        # Return parser output if nothing matched
+        # -------------------------------------------------------------
+
+        return text
 
 
     @staticmethod
@@ -586,6 +570,11 @@ class RetrievalQueryBuilder:
         if name:
             parts.append(name)
 
+        group = self._get_object_group(scene_object)
+
+        if group:
+            parts.append(f"Group: {group}")
+
         description = self._get_description(scene_object)
         if description:
             parts.append(description)
@@ -616,6 +605,11 @@ class RetrievalQueryBuilder:
         text = self._get_text(scene_object)
         if text:
             parts.append(f"Text: {text}")
+
+        symbol = self._get_symbol(scene_object)
+
+        if symbol:
+            parts.append(f"Symbol: {symbol}")
 
         nearby = self._get_nearby_objects(scene_object)
         if nearby:

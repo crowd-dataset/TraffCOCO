@@ -110,98 +110,97 @@ class PipelineCache:
 
             self._cache[image_name] = {}
 
-    def _validate_object(
+    def _normalize_object(
         self,
         obj: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         """
-        Validate a Scene Understanding object.
+        Normalize Scene Understanding output.
 
-        Supports both output schemas:
-
-        Schema A
-            Vehicles, road users, buses, trucks, motorcycles,
-            bicycles, animals, traffic cones, street lights,
-            gantries, bridges and tunnels.
-
-        Required:
-            object_id
-            observed_object
-            description
-
-        Schema B
-            Traffic signs, traffic signals, road markings,
-            infrastructure, temporary objects,
-            country-specific objects.
-
-        Required:
-            object_id
-            observed_object
-            description
-            object_group
-            visual_attributes
+        Missing fields are automatically created instead of rejecting
+        the object.
         """
 
-        # ----------------------------------------------------------
-        # Fields required for EVERY object
-        # ----------------------------------------------------------
+        obj = deepcopy(obj)
 
-        common_required = (
+        obj.setdefault(
             "object_id",
+            -1,
+        )
+
+        obj.setdefault(
             "observed_object",
+            "unknown",
+        )
+
+        obj.setdefault(
             "description",
+            "",
         )
 
-        missing = [
-            field
-            for field in common_required
-            if field not in obj
-        ]
+        if "object_group" in obj:
 
-        if missing:
-
-            raise ValueError(
-                f"Missing required fields: {missing}"
+            obj.setdefault(
+                "visual_attributes",
+                {},
             )
 
-        # ----------------------------------------------------------
-        # Schema A
-        #
-        # No object_group means this is Schema A.
-        # ----------------------------------------------------------
+            visual = obj["visual_attributes"]
 
-        if "object_group" not in obj:
-
-            return
-
-        # ----------------------------------------------------------
-        # Schema B
-        # ----------------------------------------------------------
-
-        schema_b_required = (
-            "visual_attributes",
-        )
-
-        missing = [
-            field
-            for field in schema_b_required
-            if field not in obj
-        ]
-
-        if missing:
-
-            raise ValueError(
-                f"Missing Schema-B fields: {missing}"
+            visual.setdefault(
+                "primary_color",
+                "unknown",
             )
 
-        if not isinstance(
-            obj["visual_attributes"],
-            dict,
-        ):
-
-            raise ValueError(
-                "'visual_attributes' must be a dictionary."
+            visual.setdefault(
+                "secondary_color",
+                "unknown",
             )
+
+            visual.setdefault(
+                "shape",
+                "unknown",
+            )
+
+            visual.setdefault(
+                "background_color",
+                "unknown",
+            )
+
+            visual.setdefault(
+                "material",
+                "unknown",
+            )
+
+            visual.setdefault(
+                "reflective",
+                "unknown",
+            )
+
+            visual.setdefault(
+                "text",
+                "none",
+            )
+
+            visual.setdefault(
+                "symbol",
+                "none",
+            )
+
+            visual.setdefault(
+                "distinguishing_features",
+                [],
+            )
+
+            visual.setdefault(
+                "border",
+                {
+                    "shape": "none",
+                    "color": "none",
+                },
+            )
+
+        return obj
     # ------------------------------------------------------------------
     # Scene Understanding
     # ------------------------------------------------------------------
@@ -214,27 +213,32 @@ class PipelineCache:
         """
         Insert Scene Understanding results into the cache.
 
-        Existing object IDs are not allowed and will raise an exception.
+        Missing fields are automatically normalized instead of causing
+        the object to be discarded.
         """
 
         self._create_image(image_name)
 
         inserted = 0
 
-        valid_objects = []
+        normalized_objects = []
 
         for obj in objects:
 
             try:
 
-                self._validate_object(obj)
+                obj = self._normalize_object(
+                    obj,
+                )
 
-                valid_objects.append(obj)
+                normalized_objects.append(
+                    obj,
+                )
 
             except Exception as exc:
 
                 logger.warning(
-                    "Skipping invalid object:\n{}",
+                    "Unable to normalize object:\n{}",
                     json.dumps(
                         obj,
                         indent=4,
@@ -247,9 +251,24 @@ class PipelineCache:
                     exc,
                 )
 
-        for obj in valid_objects:
+        for obj in normalized_objects:
 
-            object_id = int(obj["object_id"])
+            object_id = int(
+                obj["object_id"],
+            )
+
+            logger.info(
+                "Cache currently contains object IDs for '{}': {}",
+                image_name,
+                list(
+                    self._cache[image_name].keys()
+                ),
+            )
+
+            logger.info(
+                "Attempting to insert object_id={}",
+                object_id,
+            )
 
             if object_id in self._cache[image_name]:
 
@@ -287,6 +306,11 @@ class PipelineCache:
                 f"No valid Scene Understanding objects found for '{image_name}'."
             )
 
+        logger.info(
+            "Cached {} normalized object(s) for '{}'.",
+            inserted,
+            image_name,
+        )
     def get_scene_objects(
         self,
         image_name: str,

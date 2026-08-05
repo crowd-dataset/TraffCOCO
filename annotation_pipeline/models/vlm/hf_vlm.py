@@ -276,11 +276,14 @@ class HFVLM(BaseVLM):
             "HF Device Map:"
         )
 
-        logger.info(
-            "{}",
-            self.model.hf_device_map,
-        )
+        device_map = getattr(self.model, "hf_device_map", None)
 
+        if device_map is not None:
+            logger.info("HF Device Map:")
+            for module, device in device_map.items():
+                logger.info(f"{module:<50} -> {device}")
+        else:
+            logger.info(f"Model loaded on device: {next(self.model.parameters()).device}")
         self.loaded = True
 
         logger.info(
@@ -379,16 +382,22 @@ class HFVLM(BaseVLM):
             responses,
         )
 
+        generated_tokens = int(generated.shape[1])
+        total_tokens = int(generated.numel())
+        del inputs
+        del generated
+
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
         return {
-
             "responses": responses,
-
             "generation_time": generation_time,
-
-            "generated_tokens": generated.shape[1],
-
-            "total_tokens": generated.numel(),
-
+            "generated_tokens": generated_tokens,
+            "total_tokens": total_tokens,
         }
 
     # ------------------------------------------------------------------
@@ -484,6 +493,10 @@ class HFVLM(BaseVLM):
         input_len = inputs["input_ids"].shape[1]
 
         generated = outputs[:, input_len:]
+
+        generated = outputs[:, input_len:].clone()
+
+        del outputs
 
         return (
             generated,
