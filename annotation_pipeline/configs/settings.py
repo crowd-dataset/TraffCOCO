@@ -152,7 +152,7 @@ class ModelsConfig:
     """
 
     scene_understanding_backend: str
-    scene_understanding_prompt : str
+    scene_understanding_prompt: str
     grounding_backend: str
     segmentation_backend: str
 
@@ -168,7 +168,6 @@ class ModelsConfig:
     locate_anything_model_id: str
 
     sam2_model_id: str
-
 
 # ============================================================================
 # Logging

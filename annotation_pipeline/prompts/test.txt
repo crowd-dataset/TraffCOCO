@@ -43,20 +43,6 @@ For every mounting location inspect:
 • every pedestrian signal
 • every bicycle signal
 
-Search for:
-
-• regulatory signs
-• warning signs
-• guide signs
-• information signs
-• parking signs
-• no parking signs
-• no stopping signs
-• mandatory signs
-• temporary signs
-• overhead guide signs
-• supplementary plates
-
 Every visually distinct traffic control device must produce its own JSON object.
 
 Never merge different signs because they share a pole.
@@ -82,6 +68,26 @@ Specifically inspect every:
 • object mounted beside the road
 • object mounted beside a street light
 • distant roadside sign
+
+on pole like strcutures only
+
+Traffic signs should additionally describe:
+
+• sign shape
+• border shape
+• border colour
+• border thickness
+• background colour
+• symbol or pictogram
+• arrow direction
+• if there is a red or black diagonal across it-fully or partially
+• number of symbols if visible
+• readable text- return exactly wot's written in them even if it's a foreign  text
+• text colour
+• supplementary plate
+• mounting position
+• reflective appearance
+• partial occlusion
 
 Every physically different traffic sign must be inspected individually.
 
@@ -137,13 +143,21 @@ dashed lane divider
 
 straight arrow
 
-left-turn arrow
-
-crosswalk
-
-stop line
-
 Do NOT merge arrows with lane boundaries.
+
+Traffic signals should additionally describe:
+
+• housing colour
+• housing shape
+• number of visible lenses
+• lens arrangement (vertical or horizontal)
+• illuminated aspect (red, yellow/amber, green or none)
+• arrow indications
+• pedestrian pictogram
+• bicycle pictogram
+• countdown display
+• mounting style
+• partial occlusion
 
 --------------------------------------------------
 PASS 3 — TRAFFIC INFRASTRUCTURE
@@ -187,49 +201,34 @@ Inspect:
 PASS 5 — FINAL SEARCH
 --------------------------------------------------
 
-Inspect the entire image again.
+Inspect the image again for:
 
-Specifically search for objects commonly missed.
-
-Look for:
-
-• small distant signs
-
+• distant signs
 • partially occluded signs
-
 • supplementary plates
-
-• traffic lights
-
+• traffic signals
 • lane arrows
-
-• faded road markings
-
+• faded markings
 • delineator posts
-
 • bollards
-
 • temporary traffic devices
-
-Only begin generating JSON after every search pass has been completed.
 
 ==================================================
 SEARCH PRIORITY
 ==================================================
 
-Priority in order:
+Highest priority:
 
-1. Traffic signs, Traffic signals and Road markings
+1. Traffic signs
+2. Traffic signals
+3. Road markings
 
-2. Roadside traffic infrastructure
+Then:
 
-3. Traffic participants
+4. Infrastructure
+5. Traffic participants
 
-Missing one traffic sign is worse than missing several vehicles.
-
-Missing one road marking is worse than describing another car.
-
-Pay special attention to small, distant and partially visible traffic objects.
+Missing a traffic sign or road marking is worse than missing a vehicle.
 
 ==================================================
 UNCERTAINTY RULE
@@ -478,6 +477,11 @@ Schema A
 {
     "object_id": integer,
     "observed_object": "...",
+    "object_group":
+        vehicle |
+        infrastructure |
+        animal |
+        traffic_objects,
     "description": "..."
 }
 
@@ -490,14 +494,17 @@ Schema B
 {
     "object_id": integer,
 
-    "observed_object":"...",
+    "observed_object": "...",
 
     "object_group":
-        "traffic_sign |
+        "road_user |
+         vehicle |
+         traffic_sign |
          traffic_signal |
          road_marking |
          infrastructure |
          temporary_object |
+         animal |
          country_specific |
          unknown",
 
@@ -519,93 +526,95 @@ Schema B
 
         "background_color":"...",
 
+        "size":
+            "small |
+             medium |
+             large",
+
         "material":"...",
 
-        "reflective": true | false | "unknown",
+        "reflective":
+            true |
+            false |
+            "unknown",
 
         "text":"...",
 
         "symbol":"...",
 
-        "distinguishing_features":[
+        "orientation":"...",
+
+        "distinguishing_features":
+        [
             "...",
             "..."
         ]
-    }
+    },
+
+    "location":
+    {
+        "image_region":
+            "top-left |
+             top-center |
+             top-right |
+             center-left |
+             center |
+             center-right |
+             bottom-left |
+             bottom-center |
+             bottom-right",
+
+        "relative_position":"...",
+
+        "approx_depth":
+            "foreground |
+             midground |
+             background"
+    },
+
+    "context":
+    {
+        "attached_to":"...",
+
+        "mounting_type":
+            "pole |
+             gantry |
+             building |
+             bridge |
+             wall |
+             vehicle |
+             ground |
+             road_surface |
+             median |
+             sidewalk |
+             unknown",
+
+        "nearby_objects":
+        [
+            "...",
+            "..."
+        ],
+
+        "visibility":
+            "full |
+             partial",
+
+        "occluded":
+            true |
+            false
+    },
+
+    "possible_function":"...",
+
+    "classification_hint":"...",
+
+    "confidence":0-100
 }
 
-==================================================
-FINAL VERIFICATION
-==================================================
-
-Before returning the JSON array, verify that you have searched for:
-
-✓ every visually distinct traffic sign
-
-✓ every supplementary plate
-
-✓ every traffic signal
-
-✓ every guide sign
-
-✓ every parking sign
-
-✓ every no parking sign
-
-✓ every no stopping sign
-
-✓ every lane divider
-
-✓ every lane arrow
-
-✓ every stop line
-
-✓ every crosswalk
-
-✓ every painted road symbol
-
-✓ every guardrail
-
-✓ every barrier
-
-✓ every bollard
-
-✓ every delineator post
-
-✓ every traffic cone
-
-✓ every street light
-
-✓ every unique vehicle type
-
-✓ every unique road user type
-
-If any visible traffic-related object type has been missed, inspect the image again before producing the JSON.
 
 ==================================================
-IMPORTANT RULES
+FINAL CHECK
 ==================================================
 
-1. Return ONLY one valid JSON array.
+Before returning JSON verify that no visible traffic sign, traffic signal, road marking, guide sign, supplementary plate, lane arrow, crosswalk, stop line, hatch marking, chevron, bollard, delineator post, traffic cone, street light, or unique vehicle type has been omitted.
 
-2. Return ONE representative object for each UNIQUE traffic-related object type.
-
-3. Never duplicate identical objects.
-
-4. Never merge visually different traffic signs.
-
-5. Never merge visually different road markings.
-
-6. Never return roads, asphalt, pavement or ordinary poles.
-
-7. Never infer hidden attributes.
-
-8. Use "unknown" whenever an attribute cannot be visually confirmed.
-
-9. Use "unreadable" for illegible text.
-
-10. Use "none" when text or symbols are absent.
-
-11. Continue until every unique visible traffic-related object type has been described.
-
-12. Accuracy is more important than completeness. If an attribute cannot be seen clearly, report it as "unknown" rather than guessing.

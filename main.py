@@ -47,6 +47,10 @@ from annotation_pipeline.pipeline.ontology import (
     OntologyEngine,
 )
 
+from annotation_pipeline.pipeline.locate_anything import (
+    LocateAnythingEngine,
+)
+
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
 
@@ -277,6 +281,12 @@ def main() -> None:
     total_generated_tokens = 0
 
     total_images = 0
+
+    total_objects = 0
+    total_reasoning_time = 0.0
+
+    total_grounding_time = 0.0
+    total_grounding_objects = 0
 
 
     # ------------------------------------------------------------------
@@ -559,6 +569,114 @@ def main() -> None:
             logger.info(
                 "Average/Object : {:.4f} s",
                 total_reasoning_time / total_objects,
+            )
+
+    # ------------------------------------------------------------------
+    # Locate Anything Grounding
+    # ------------------------------------------------------------------
+
+    if config.pipeline.run_grounding:
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("LOCATE ANYTHING GROUNDING")
+        logger.info("=" * 80)
+
+        try:
+
+            logger.info(
+                "Creating LocateAnythingEngine."
+            )
+
+            grounding_engine = LocateAnythingEngine(
+                config=config,
+            )
+
+            logger.info(
+                "LocateAnythingEngine successfully initialized."
+            )
+
+            grounding_start = time.perf_counter()
+
+            grounding_results = grounding_engine.process_images(
+                image_paths=image_paths,
+                cache=cache,
+            )
+
+            total_grounding_time = (
+                time.perf_counter()
+                - grounding_start
+            )
+
+            total_grounding_objects = (
+                grounding_engine.last_objects_processed
+            )
+
+            logger.info("")
+            logger.info(
+                "Locate Anything completed successfully."
+            )
+
+            logger.info(
+                "Images Processed : {}",
+                grounding_engine.last_images_processed,
+            )
+
+            logger.info(
+                "Objects Processed : {}",
+                grounding_engine.last_objects_processed,
+            )
+
+            logger.info(
+                "Grounding Time : {:.2f} s",
+                total_grounding_time,
+            )
+
+            if grounding_engine.last_images_processed:
+
+                logger.info(
+                    "Average/Image : {:.2f} s",
+                    total_grounding_time
+                    / grounding_engine.last_images_processed,
+                )
+
+        except Exception as e:
+
+            logger.error(
+                "Locate Anything grounding failed: {}",
+                e,
+            )
+
+            failed_images.extend(
+                (
+                    image_path.name,
+                    "Locate Anything",
+                    str(e),
+                )
+                for image_path in image_paths
+            )
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("LOCATE ANYTHING SUMMARY")
+        logger.info("=" * 80)
+
+        logger.info(
+            "Objects Processed : {}",
+            total_grounding_objects,
+        )
+
+        logger.info(
+            "Total Time : {:.2f} s",
+            total_grounding_time,
+        )
+
+        if total_grounding_objects:
+
+            logger.info(
+                "Average/Object : {:.4f} s",
+                total_grounding_time
+                / total_grounding_objects,
             )
 
     # ------------------------------------------------------------------

@@ -1,0 +1,27 @@
+vehicles:
+  - passenger car
+  - truck
+  - bus
+  - van
+  - motorcycle
+  - bicycle
+
+road_users:
+  - pedestrian
+
+traffic_signs:
+  - traffic sign
+
+traffic_signals:
+  - traffic signal
+
+road_markings:
+  - road marking
+  - lane marking
+
+infrastructure:
+  - bridge
+  - street light
+
+temporary:
+  - traffic cone

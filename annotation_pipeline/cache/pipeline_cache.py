@@ -380,6 +380,105 @@ class PipelineCache:
             image_name,
         )
 
+    def add_grounding_result(
+        self,
+        image_name: str,
+        object_id: int,
+        grounding_result: dict[str, Any],
+    ) -> None:
+        """
+        Store Locate Anything grounding results for an object.
+
+        Grounding results are merged into the existing grounding entry
+        rather than replacing the entire entry.
+
+        Parameters
+        ----------
+        image_name
+            Name of the image.
+
+        object_id
+            Original Scene Understanding object ID.
+
+        grounding_result
+            Parsed Locate Anything grounding information, typically:
+
+            {
+                "object_name": "passenger car",
+                "bbox": [x1, y1, x2, y2]
+            }
+        """
+
+        # ----------------------------------------------------------
+        # Validate image
+        # ----------------------------------------------------------
+
+        if image_name not in self._cache:
+
+            raise KeyError(
+                f"No cache exists for image '{image_name}'."
+            )
+
+        # ----------------------------------------------------------
+        # Validate object
+        # ----------------------------------------------------------
+
+        if object_id not in self._cache[image_name]:
+
+            raise KeyError(
+                f"Object {object_id} does not exist "
+                f"for image '{image_name}'."
+            )
+
+        # ----------------------------------------------------------
+        # Validate grounding result
+        # ----------------------------------------------------------
+
+        if not isinstance(
+            grounding_result,
+            dict,
+        ):
+
+            raise TypeError(
+                "grounding_result must be a dictionary."
+            )
+
+        # ----------------------------------------------------------
+        # Existing grounding data
+        # ----------------------------------------------------------
+
+        grounding = self._cache[
+            image_name
+        ][
+            object_id
+        ].setdefault(
+            PipelineStage.GROUNDING.value,
+            {},
+        )
+
+        # ----------------------------------------------------------
+        # Merge new grounding result
+        # ----------------------------------------------------------
+
+        grounding.update(
+            deepcopy(
+                grounding_result,
+            )
+        )
+
+        # ----------------------------------------------------------
+        # Ensure object ID is never lost
+        # ----------------------------------------------------------
+
+        grounding["object_id"] = object_id
+
+        logger.debug(
+            "Stored grounding result for object {} in '{}': {}",
+            object_id,
+            image_name,
+            grounding,
+        )
+
     def save_image_cache(
         self,
         image_name: str,

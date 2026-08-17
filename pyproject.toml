@@ -19,7 +19,7 @@ dependencies = [
     # Deep Learning
     "torch>=2.6,<3.0",
     "torchvision>=0.21",
-    "transformers>=5.10.1,<6",
+    "transformers==4.57.1",
     "accelerate>=1.8",
     "safetensors>=0.5",
     # Required by many Hugging Face VLMs
@@ -35,6 +35,9 @@ dependencies = [
     #plotting
     "matplotlib>=3.10.0",
     "librosa>=0.11.0",
+    "decord>=0.6.0",
+    "lmdb>=2.3.0",
+    "peft>=0.20.0",
 ]
 
 [project.optional-dependencies]

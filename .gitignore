@@ -222,5 +222,27 @@ outputs
 *.pkl
 *.index
 
+# Model weights / downloaded model artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# Hugging Face / model caches
+.cache/
+.huggingface/
+
+# LocateAnything downloaded model
+.locateanything_model/
+
+# Generated pipeline outputs
+visualizations/
+json_outputs_scene_/
+json_outputs_test1/
+
+# Pipeline-generated outputs
+annotation_pipeline/outputs/
+
 #tests
 tests/
