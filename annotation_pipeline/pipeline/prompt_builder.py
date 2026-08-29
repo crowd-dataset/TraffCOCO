@@ -19,6 +19,7 @@ Prompt String
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from custom_logger import CustomLogger
@@ -47,34 +48,27 @@ class PromptBuilder:
     # Public API
     # ----------------------------------------------------------
 
+    @staticmethod
+    def _normalize_label(value: Any) -> str:
+        """Normalize a visual label into a concise grounding phrase."""
+        text = str(value).strip()
+        text = re.sub(r"^(?:object\s+name|object|name)\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = text.replace("_", " ")
+        text = re.sub(r"\s+", " ", text)
+        text = text.strip(" -_:;,.\n\r\t")
+        return text
+
     def build_prompt(
         self,
         scene_objects: list[dict[str, Any]],
     ) -> str:
         """
-        Build a native Locate Anything category prompt from
-        Scene Understanding output.
+        Build a native Locate Anything category prompt from the available
+        ontology-grounding information when present.
 
-        The object categories are extracted dynamically from the
-        parsed scene-understanding JSON. No object classes are
-        hard-coded here.
-
-        Locate Anything expects categories to be separated by:
-
-            </c>
-
-        Example
-        -------
-        Scene JSON:
-            passenger car
-            van
-            truck
-            road marking
-            street light
-            building
-
-        Generated prompt:
-            passenger car</c>van</c>truck</c>road marking</c>street light</c>building
+        This preserves the intended architecture: ontology provides the
+        grounding_prompt, and Locate Anything consumes that value instead
+        of reconstructing prompts from raw scene labels.
         """
 
         logger.info(
@@ -85,68 +79,54 @@ class PromptBuilder:
 
         for obj in scene_objects:
 
-            if not isinstance(
-                obj,
-                dict,
-            ):
+            if not isinstance(obj, dict):
                 logger.warning(
                     "Skipping invalid scene object: {}",
                     obj,
                 )
                 continue
 
-            object_name = obj.get(
-                "observed_object",
-                obj.get(
-                    "object_name",
-                    "",
-                ),
-            )
+            grounding_prompt = obj.get("grounding_prompt")
 
-            if not object_name:
-                continue
+            if not grounding_prompt:
+                ontology = obj.get("ontology_reasoning")
+                if isinstance(ontology, dict):
+                    prediction = ontology.get("prediction", {})
+                    if isinstance(prediction, dict):
+                        grounding_prompt = prediction.get("grounding_prompt")
 
-            object_name = str(
-                object_name
-            ).strip()
-
-            if not object_name:
-                continue
-
-            # ------------------------------------------------------
-            # Preserve the class name exactly as provided by the
-            # parsed Scene Understanding output.
-            # Do NOT replace spaces with underscores.
-            # ------------------------------------------------------
-
-            if object_name not in object_names:
-
-                object_names.append(
-                    object_name
+            if not grounding_prompt:
+                grounding_prompt = obj.get(
+                    "observed_object",
+                    obj.get("object_name", ""),
                 )
 
-        if not object_names:
+            if not grounding_prompt:
+                continue
 
+            label = self._normalize_label(grounding_prompt)
+            if not label:
+                continue
+
+            # DO NOT collapse distinct scene objects merely because they share
+            # the same grounding prompt. Repeated prompts are still meaningful
+            # when multiple objects of the same category are present in the same
+            # image, and the downstream annotation stage must retain that
+            # identity through the object-ordering of the prompt list.
+            object_names.append(label)
+
+        if not object_names:
             logger.warning(
                 "No valid object names found for grounding."
             )
-
             return ""
 
-        # ----------------------------------------------------------
-        # Native Locate Anything category separator.
-        # ----------------------------------------------------------
-
-        prompt = "</c>".join(
-            object_names
-        )
+        prompt = "</c>".join(object_names)
 
         logger.info(
-            "Created grounding prompt for {} unique "
-            "object categories.",
+            "Created grounding prompt for {} unique object categories.",
             len(object_names),
         )
-
         logger.info(
             "Locate Anything prompt: {}",
             prompt,

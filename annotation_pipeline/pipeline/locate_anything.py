@@ -208,6 +208,80 @@ class LocateAnythingEngine:
     # Batch Processing
     # ----------------------------------------------------------
 
+    def _load_scene_objects_for_grounding(
+        self,
+        image_path: Path,
+        cache: PipelineCache,
+    ) -> list[dict[str, Any]]:
+        """
+        Load scene objects in the form the grounding stage actually needs.
+
+        The ontology stage enriches the cached object entries with
+        ``ontology_reasoning.prediction.grounding_prompt``. Prefer that over
+        the raw scene-understanding JSON so Locate Anything receives the
+        canonical grounding prompt instead of the generic object label.
+        """
+
+        image_name = image_path.name
+
+        image_cache = getattr(cache, "_cache", {}).get(image_name, {})
+        if isinstance(image_cache, dict) and image_cache:
+            scene_objects: list[dict[str, Any]] = []
+
+            for object_id, entry in sorted(
+                image_cache.items(),
+                key=lambda item: (
+                    not str(item[0]).isdigit(),
+                    int(item[0]) if str(item[0]).isdigit() else 0,
+                ),
+            ):
+                if not isinstance(entry, dict):
+                    continue
+
+                scene_object = entry.get("scene_understanding")
+                if not isinstance(scene_object, dict):
+                    continue
+
+                merged = dict(scene_object)
+                merged["object_id"] = scene_object.get("object_id", object_id)
+
+                ontology = entry.get("ontology_reasoning")
+                if isinstance(ontology, dict):
+                    prediction = ontology.get("prediction", {})
+                    if isinstance(prediction, dict):
+                        merged["ontology_reasoning"] = ontology
+                        merged["class_id"] = prediction.get("class_id")
+                        merged["class_name"] = prediction.get("class_name")
+                        merged["grounding_prompt"] = (
+                            prediction.get("grounding_prompt")
+                            or merged.get("grounding_prompt")
+                        )
+
+                scene_objects.append(merged)
+
+            if scene_objects:
+                scene_objects.sort(key=lambda obj: int(obj.get("object_id", 0)))
+                return scene_objects
+
+        scene_file = (
+            self.config.paths.scene_cache
+            / "parsed"
+            / f"{image_path.stem}.json"
+        )
+
+        if not scene_file.exists():
+            return []
+
+        with scene_file.open("r", encoding="utf-8") as file:
+            scene_objects = json.load(file)
+
+        if not isinstance(scene_objects, list):
+            return []
+
+        return [
+            obj for obj in scene_objects if isinstance(obj, dict)
+        ]
+
     def _process_batch(
         self,
         batch: list[Path],
@@ -240,45 +314,20 @@ class LocateAnythingEngine:
                 image_name,
             )
 
-            scene_file = (
-
-                self.config.paths.scene_cache
-
-                / "parsed"
-
-                / f"{image_path.stem}.json"
-
+            scene_objects = self._load_scene_objects_for_grounding(
+                image_path=image_path,
+                cache=cache,
             )
 
-            if not scene_file.exists():
-
-                logger.warning(
-                    "Scene cache not found: '{}'.",
-                    scene_file,
-                )
-
-                continue
-
-            with scene_file.open(
-                "r",
-                encoding="utf-8",
-            ) as file:
-
-                scene_objects = json.load(
-                    file,
-                )
-
             if not scene_objects:
-
                 logger.warning(
                     "No scene objects found for '{}'.",
                     image_name,
                 )
-
                 continue
 
             scene_objects.sort(
-                key=lambda obj: obj["object_id"],
+                key=lambda obj: int(obj.get("object_id", 0)),
             )
 
             prompt = self.prompt_builder.build_prompt(
@@ -424,6 +473,20 @@ class LocateAnythingEngine:
                 image_size=image.size,
             )
 
+            # --------------------------------------------------
+            # Resolve None object_ids using same-label propagation.
+            #
+            # This was previously defined but never invoked, which
+            # meant every detection past the first per label stayed
+            # unresolved and fell into the top-level orphan bucket
+            # instead of being appended alongside its siblings under
+            # the correct object_id.
+            # --------------------------------------------------
+
+            detections = self._resolve_missing_object_ids(
+                detections,
+            )
+
             self.last_objects_processed += len(
                 detections,
             )
@@ -565,6 +628,150 @@ class LocateAnythingEngine:
                 encoding="utf-8",
             )
 
+    def _resolve_missing_object_ids(
+        self,
+        detections: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Resolve Locate Anything detections whose object_id is None.
+
+        Locate Anything may return multiple detections with the same
+        object_name, while only some of them may have an object_id.
+
+        If a label has an existing valid integer object_id, all detections
+        with that same normalized label and object_id=None inherit that ID.
+
+        Example
+        -------
+        bus -> 12
+        bus -> None
+        bus -> None
+
+        becomes
+
+        bus -> 12
+        bus -> 12
+        bus -> 12
+
+        A label is NOT resolved if no valid integer ID already exists
+        for that label.
+
+        If multiple different integer IDs exist for the same label,
+        the None detections remain unresolved because the label alone
+        cannot determine which object they belong to.
+        """
+
+        if not detections:
+            return detections
+
+        def normalize_label(value: Any) -> str:
+            if value is None:
+                return ""
+
+            label = str(value).strip().lower()
+
+            # Normalize common formatting differences.
+            label = label.replace("_", " ")
+            label = label.replace("-", " ")
+
+            # Collapse repeated whitespace.
+            label = " ".join(label.split())
+
+            return label
+
+        # --------------------------------------------------------------
+        # First pass:
+        # Build label -> valid integer object IDs
+        # --------------------------------------------------------------
+
+        label_to_ids: dict[str, set[int]] = {}
+
+        for detection in detections:
+
+            object_id = detection.get("object_id")
+
+            # Only existing integer IDs are authoritative.
+            #
+            # bool is technically an int subclass, so explicitly reject it.
+            if (
+                isinstance(object_id, int)
+                and not isinstance(object_id, bool)
+            ):
+                label = normalize_label(
+                    detection.get("object_name")
+                )
+
+                if not label:
+                    continue
+
+                label_to_ids.setdefault(
+                    label,
+                    set(),
+                ).add(object_id)
+
+        # --------------------------------------------------------------
+        # Second pass:
+        # Resolve object_id=None using the authoritative ID
+        # for the same label.
+        # --------------------------------------------------------------
+
+        resolved_count = 0
+
+        for detection in detections:
+
+            if detection.get("object_id") is not None:
+                continue
+
+            label = normalize_label(
+                detection.get("object_name")
+            )
+
+            if not label:
+                continue
+
+            candidate_ids = label_to_ids.get(
+                label,
+                set(),
+            )
+
+            # Exactly one existing ID means the association is
+            # deterministic.
+            if len(candidate_ids) == 1:
+
+                resolved_id = next(
+                    iter(candidate_ids)
+                )
+
+                detection["object_id"] = resolved_id
+
+                resolved_count += 1
+
+                logger.debug(
+                    "Resolved missing object_id: "
+                    "'{}' -> {}",
+                    detection.get("object_name"),
+                    resolved_id,
+                )
+
+            # Multiple IDs for the same label are ambiguous.
+            # Do NOT arbitrarily choose one.
+            elif len(candidate_ids) > 1:
+
+                logger.warning(
+                    "Could not resolve object_id for '{}' "
+                    "because multiple IDs exist: {}",
+                    detection.get("object_name"),
+                    sorted(candidate_ids),
+                )
+
+        logger.info(
+            "Resolved {} Locate Anything detection(s) "
+            "with previously missing object_id.",
+            resolved_count,
+        )
+
+        return detections
+
     # ----------------------------------------------------------
     # Cache
     # ----------------------------------------------------------
@@ -581,6 +788,20 @@ class LocateAnythingEngine:
 
         Scene Understanding objects are inserted into the cache first so that
         grounding results can be attached to their existing object IDs.
+
+        IMPORTANT:
+        Detections with a valid (possibly just-resolved) integer
+        object_id are appended per-object via add_grounding_result,
+        which now appends to a list rather than overwriting a single
+        dict -- so multiple boxes sharing one object_id are all kept.
+
+        Detections that still have object_id=None after
+        _resolve_missing_object_ids (genuinely no scene object to
+        attach to) are stored via add_unmatched_grounding_result
+        rather than a bare top-level list, so annotation.py can find
+        them through a single, well-defined path instead of relying
+        on an early-return key lookup that silently hid every
+        per-object detection stored alongside it.
         """
 
         logger.info(
@@ -609,19 +830,15 @@ class LocateAnythingEngine:
         # Store grounding results
         # ----------------------------------------------------------
 
+        matched_count = 0
+        unmatched_count = 0
+        failed_count = 0
+
         for detection in detections:
 
             object_id = detection.get(
                 "object_id",
             )
-
-            if object_id is None:
-
-                logger.warning(
-                    "Skipping grounding detection without object_id."
-                )
-
-                continue
 
             grounding_result = {
                 key: value
@@ -629,27 +846,46 @@ class LocateAnythingEngine:
                 if key != "object_id"
             }
 
-            try:
+            if object_id is not None:
 
-                cache.add_grounding_result(
+                try:
+                    cache.add_grounding_result(
+                        image_name=image_name,
+                        object_id=int(object_id),
+                        grounding_result=grounding_result,
+                    )
+                    matched_count += 1
+
+                except KeyError as exc:
+                    logger.warning(
+                        "Unable to cache grounding result for "
+                        "object {} in '{}': {}",
+                        object_id,
+                        image_name,
+                        exc,
+                    )
+                    failed_count += 1
+
+            else:
+                cache.add_unmatched_grounding_result(
                     image_name=image_name,
-                    object_id=int(object_id),
                     grounding_result=grounding_result,
                 )
+                unmatched_count += 1
 
-            except KeyError as exc:
-
-                logger.warning(
-                    "Unable to cache grounding result for "
-                    "object {} in '{}': {}",
-                    object_id,
+                logger.info(
+                    "Preserved unmatched grounding detection "
+                    "(no object_id) for '{}'.",
                     image_name,
-                    exc,
                 )
 
         logger.info(
-            "Pipeline cache updated for '{}'.",
+            "Pipeline cache updated for '{}': "
+            "{} matched, {} unmatched, {} failed to cache.",
             image_name,
+            matched_count,
+            unmatched_count,
+            failed_count,
         )
     # ----------------------------------------------------------
     # Statistics

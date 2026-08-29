@@ -246,3 +246,4 @@ annotation_pipeline/outputs/
 
 #tests
 tests/
+grounding_first/

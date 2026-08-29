@@ -43,6 +43,8 @@ class OntologyEntry:
 
     embedding_text: str
 
+    grounding_prompt: str
+
     data: dict[str, Any]
 
 

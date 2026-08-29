@@ -18,14 +18,10 @@ def build_ontology_entries(
     """
     Convert the ontology JSON into OntologyEntry objects.
 
-    Parameters
-    ----------
-    ontology
-        Parsed ontology JSON.
-
-    Returns
-    -------
-    list[OntologyEntry]
+    The production ontology JSON will eventually include a
+    ``grounding_prompt`` field. The code is made compatible with that
+    future schema while still accepting older entries that do not define
+    it yet.
     """
 
     classes = ontology.get("classes", [])
@@ -34,11 +30,25 @@ def build_ontology_entries(
 
     for item in classes:
 
+        class_id = item.get("class_id")
+        class_name = item.get("class_name")
+        embedding_text = item.get("embedding_text", "")
+        grounding_prompt = item.get("grounding_prompt", class_name)
+
+        if not isinstance(grounding_prompt, str):
+            grounding_prompt = str(class_name or "")
+
+        grounding_prompt = grounding_prompt.strip()
+
+        if not grounding_prompt and class_name is not None:
+            grounding_prompt = str(class_name).strip()
+
         entries.append(
             OntologyEntry(
-                class_id=item["class_id"],
-                class_name=item["class_name"],
-                embedding_text=item["embedding_text"],
+                class_id=class_id,
+                class_name=class_name,
+                embedding_text=embedding_text,
+                grounding_prompt=grounding_prompt,
                 data=item,
             )
         )

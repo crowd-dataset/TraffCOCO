@@ -239,49 +239,47 @@ class OntologyEngine:
             retrieval_query,
         )
 
+        if result.predicted_class is None:
+            logger.warning(
+                "No ontology prediction available for '{}'.",
+                retrieval_query.observed_object,
+            )
+            return {
+                "retrieval_query": retrieval_query.embedding_text,
+                "prediction": {
+                    "class_id": None,
+                    "class_name": None,
+                    "score": 0.0,
+                    "grounding_prompt": None,
+                },
+                "top_candidates": [],
+            }
+
+        predicted_entry = result.predicted_class.entry
+
         ontology_result = {
-
-            "retrieval_query":
-                retrieval_query.embedding_text,
-
+            "retrieval_query": retrieval_query.embedding_text,
             "prediction": {
-
-                "class_id":
-                    result.predicted_class.entry.class_id,
-
-                "class_name":
-                    result.predicted_class.entry.class_name,
-
-                "score":
-                    result.predicted_class.final_score,
-
+                "class_id": predicted_entry.class_id,
+                "class_name": predicted_entry.class_name,
+                "score": result.predicted_class.final_score,
+                "grounding_prompt": getattr(
+                    predicted_entry,
+                    "grounding_prompt",
+                    None,
+                ),
             },
-
             "top_candidates": [
-
                 {
-
-                    "class_id":
-                        candidate.entry.class_id,
-
-                    "class_name":
-                        candidate.entry.class_name,
-
-                    "embedding_score":
-                        candidate.embedding_score,
-
-                    "attribute_score":
-                        candidate.attribute_score,
-
-                    "final_score":
-                        candidate.final_score,
-
+                    "class_id": candidate.entry.class_id,
+                    "class_name": candidate.entry.class_name,
+                    "score": candidate.final_score,
+                    "embedding_score": candidate.embedding_score,
+                    "attribute_score": candidate.attribute_score,
+                    "final_score": candidate.final_score,
                 }
-
                 for candidate in result.candidates
-
             ],
-
         }
 
         logger.debug(
@@ -290,5 +288,3 @@ class OntologyEngine:
         )
 
         return ontology_result
-
-    

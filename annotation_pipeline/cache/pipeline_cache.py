@@ -77,7 +77,14 @@ class PipelineCache:
 
                         "prompt_builder": {},
 
-                        "grounding": {},
+                        "grounding": [],       # LIST — one entry per
+                                               # Locate Anything bbox.
+                                               # Multiple bboxes can
+                                               # legitimately share the
+                                               # same object_id, so this
+                                               # must never be a single
+                                               # dict that later calls
+                                               # silently overwrite.
 
                         "segmentation": {}
                     }
@@ -290,8 +297,9 @@ class PipelineCache:
                 PipelineStage.PROMPT_BUILDER.value:
                     {},
 
+                # NOTE: this is a LIST, not a dict. See class docstring.
                 PipelineStage.GROUNDING.value:
-                    {},
+                    [],
 
                 PipelineStage.SEGMENTATION.value:
                     {},
@@ -387,10 +395,16 @@ class PipelineCache:
         grounding_result: dict[str, Any],
     ) -> None:
         """
-        Store Locate Anything grounding results for an object.
+        Append one Locate Anything grounding detection for an object.
 
-        Grounding results are merged into the existing grounding entry
-        rather than replacing the entire entry.
+        IMPORTANT:
+        Multiple Locate Anything boxes can legitimately share the same
+        object_id (multiple instances of the same class, e.g. three
+        cars all resolving to the same canonical scene object). This
+        method therefore APPENDS a new detection to a list on every
+        call — it must NEVER merge/overwrite into a single dict, or
+        every call after the first one for the same object_id would
+        silently destroy the previous bbox.
 
         Parameters
         ----------
@@ -444,39 +458,122 @@ class PipelineCache:
             )
 
         # ----------------------------------------------------------
-        # Existing grounding data
+        # Existing grounding data (list — see docstring above)
         # ----------------------------------------------------------
 
-        grounding = self._cache[
+        detections = self._cache[
             image_name
         ][
             object_id
         ].setdefault(
             PipelineStage.GROUNDING.value,
-            {},
+            [],
         )
 
-        # ----------------------------------------------------------
-        # Merge new grounding result
-        # ----------------------------------------------------------
+        # Back-compat: if an older cache instance still has a dict here
+        # (e.g. loaded from an older saved JSON), migrate it to a list
+        # instead of crashing on .append().
+        if isinstance(detections, dict):
 
-        grounding.update(
-            deepcopy(
-                grounding_result,
+            logger.warning(
+                "Migrating legacy dict-based grounding entry to list "
+                "for object {} in '{}'.",
+                object_id,
+                image_name,
             )
+
+            migrated = [detections] if detections else []
+
+            self._cache[image_name][object_id][
+                PipelineStage.GROUNDING.value
+            ] = migrated
+
+            detections = migrated
+
+        # ----------------------------------------------------------
+        # Append new grounding result (never overwrite)
+        # ----------------------------------------------------------
+
+        detection = deepcopy(
+            grounding_result,
         )
 
-        # ----------------------------------------------------------
-        # Ensure object ID is never lost
-        # ----------------------------------------------------------
+        # Ensure object ID is never lost.
+        detection["object_id"] = object_id
 
-        grounding["object_id"] = object_id
+        detections.append(
+            detection,
+        )
 
         logger.debug(
-            "Stored grounding result for object {} in '{}': {}",
+            "Appended grounding detection for object {} in '{}' "
+            "(now {} total): {}",
             object_id,
             image_name,
-            grounding,
+            len(detections),
+            detection,
+        )
+
+    def add_unmatched_grounding_result(
+        self,
+        image_name: str,
+        grounding_result: dict[str, Any],
+    ) -> None:
+        """
+        Store a Locate Anything detection that could not be matched to
+        ANY scene object.
+
+        Previously there was no slot in the schema for a genuinely
+        orphaned detection (one with no resolvable object_id and no
+        scene object to attach to), which meant callers had to silently
+        drop it rather than call add_grounding_result (which requires
+        an existing object_id key and raises KeyError otherwise).
+
+        These are stored separately under "_unmatched_grounding" so
+        they are never confused with per-object grounding entries, but
+        are still recoverable by the annotation stage for preservation
+        under Case 4 of the ID-resolution rule (log + do not silently
+        discard, even if ontology identity cannot be attached).
+        """
+
+        if image_name not in self._cache:
+
+            raise KeyError(
+                f"No cache exists for image '{image_name}'."
+            )
+
+        if not isinstance(
+            grounding_result,
+            dict,
+        ):
+
+            raise TypeError(
+                "grounding_result must be a dictionary."
+            )
+
+        orphans = self._cache[image_name].setdefault(
+            "_unmatched_grounding",
+            [],
+        )
+
+        detection = deepcopy(
+            grounding_result,
+        )
+
+        detection.setdefault(
+            "object_id",
+            None,
+        )
+
+        orphans.append(
+            detection,
+        )
+
+        logger.warning(
+            "Stored unmatched Locate Anything detection for '{}' "
+            "(no scene object association): {}",
+            image_name,
+            detection,
         )
 
     def save_image_cache(

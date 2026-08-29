@@ -50,7 +50,7 @@ from annotation_pipeline.pipeline.ontology import (
 from annotation_pipeline.pipeline.locate_anything import (
     LocateAnythingEngine,
 )
-
+from annotation_pipeline.pipeline.annotation import AnnotationEngine
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
 
@@ -148,6 +148,39 @@ def prepare_random_frames(
         )
 
         raise
+
+def run_annotation_stage(
+    annotation_engine: AnnotationEngine,
+    image_path: Path,
+) -> tuple[list[dict], Path]:
+    """
+    Run the final annotation stage for one image.
+
+    The AnnotationEngine:
+        - finds the pipeline cache corresponding to image_path
+        - reads the existing scene/ontology/grounding results
+        - matches Locate Anything grounding prompts
+        - resolves the final ontology labels
+        - creates the final visualization on the original image
+
+    Returns:
+        final_detections
+        visualization_path
+    """
+
+    final_detections = annotation_engine.annotate_image(
+        image_path
+    )
+
+    visualization_path = (
+        annotation_engine.output_dir
+        / f"{image_path.stem}_annotated.png"
+    )
+
+    return (
+        final_detections,
+        visualization_path,
+    )
 
 # ============================================================================
 # Main Pipeline
@@ -287,6 +320,11 @@ def main() -> None:
 
     total_grounding_time = 0.0
     total_grounding_objects = 0
+
+    annotation_engine = AnnotationEngine(
+        pipeline_cache_dir=config.paths.pipeline_cache,
+        output_dir=config.paths.annotations,
+    )
 
 
     # ------------------------------------------------------------------
@@ -679,6 +717,67 @@ def main() -> None:
                 / total_grounding_objects,
             )
 
+    # ==============================================================
+    # ANNOTATION
+    # ==============================================================
+
+    if config.pipeline.run_annotation:
+
+        results: dict[str, dict[str, Any]] = {}
+        stage_results: dict[str, dict[str, Any]] = {}
+        processed_count = 0
+
+        for image_path in image_paths:
+            processed_count += 1
+            try:
+                final_detections, visualization_path = (
+                    run_annotation_stage(
+                        annotation_engine=annotation_engine,
+                        image_path=image_path,
+                    )
+                )
+
+                logger.info(
+                    "Annotation completed for %s",
+                    image_path.name,
+                )
+
+                logger.info(
+                    "Final detections: %d",
+                    len(final_detections),
+                )
+
+                logger.info(
+                    "Final visualization: %s",
+                    visualization_path,
+                )
+
+                stage_results[image_path.name] = {
+                    "status": "completed",
+                    "detections": len(final_detections),
+                    "visualization_path": str(visualization_path),
+                }
+                results[image_path.name] = {
+                    "annotation": stage_results[image_path.name],
+                }
+
+            except Exception as exc:
+                logger.error(
+                    "Annotation failed for {}",
+                    image_path.name,
+                )
+
+                stage_results[image_path.name] = {
+                    "status": "failed",
+                    "error": str(exc),
+                }
+                results[image_path.name] = {
+                    "annotation": stage_results[image_path.name],
+                }
+
+                failed_images.append(
+                    (image_path.name, "Annotation", str(exc)),
+                )
     # ------------------------------------------------------------------
     # Pipeline Complete
     # ------------------------------------------------------------------
@@ -754,6 +853,131 @@ def main() -> None:
         logger.info(
             "All images processed successfully."
         )
+
+    # --------------------------------------------------------------
+    # Successful annotation outputs
+    # --------------------------------------------------------------
+
+    if processed_count > 0:
+        logger.info("")
+        logger.info("FINAL ANNOTATION OUTPUTS")
+        logger.info("-" * 70)
+
+        for image_path in image_paths:
+
+            image_name = image_path.name
+
+            result = results.get(
+                image_name
+            )
+
+            if not isinstance(
+                result,
+                dict,
+            ):
+                continue
+
+            annotation_result = result.get(
+                "annotation"
+            )
+
+            if not isinstance(
+                annotation_result,
+                dict,
+            ):
+                continue
+
+            if (
+                annotation_result.get("status")
+                != "completed"
+            ):
+                continue
+
+            detections = annotation_result.get(
+                "detections",
+                0,
+            )
+
+            visualization_path = (
+                annotation_result.get(
+                    "visualization_path"
+                )
+            )
+
+            logger.info(
+                "  {}",
+                image_name,
+            )
+
+            logger.info(
+                "      Final detections : {}",
+                detections,
+            )
+
+            if visualization_path:
+                logger.info(
+                    "      Visualization    : {}",
+                    visualization_path,
+                )
+
+    # --------------------------------------------------------------
+    # Failed images
+    # --------------------------------------------------------------
+
+    if failed_images:
+
+        logger.warning("")
+        logger.warning(
+            "{} image(s) failed during processing.",
+            len(failed_images),
+        )
+
+        for failure in failed_images:
+
+            if isinstance(
+                failure,
+                dict,
+            ):
+                image_name = failure.get(
+                    "image",
+                    "unknown",
+                )
+
+                stage = failure.get(
+                    "stage",
+                    "unknown",
+                )
+
+                reason = failure.get(
+                    "reason",
+                    "unknown",
+                )
+
+                logger.warning(
+                    "    {} | Stage: {} | Reason: {}",
+                    image_name,
+                    stage,
+                    reason,
+                )
+
+            else:
+                logger.warning(
+                    "    {}",
+                    failure,
+                )
+
+    # --------------------------------------------------------------
+    # Output directory
+    # --------------------------------------------------------------
+
+    if annotation_engine is not None:
+        logger.info("")
+        logger.info(
+            "Final visualization directory: {}",
+            annotation_engine.output_dir,
+        )
+
+    logger.info("=" * 70)
 
 
 if __name__ == "__main__":

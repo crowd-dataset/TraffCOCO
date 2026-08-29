@@ -50,8 +50,8 @@ class CandidateRanker:
 
         self.config = config
 
-        self.embedding_weight = 0.60
-        self.attribute_weight = 0.40
+        self.embedding_weight = 0.70
+        self.attribute_weight = 0.30
 
         logger.info(
             "Initialized ontology evidence ranker."

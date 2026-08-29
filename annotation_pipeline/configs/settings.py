@@ -158,6 +158,7 @@ class ModelsConfig:
 
     gemma_model_id: str
     smolvlm_model_id: str
+    qwen_model_id: str
 
     embedding_model_id: str
     embedding_device: str
@@ -253,7 +254,9 @@ class PipelineParams:
     save_visualizations: bool
 
     num_images: int
-    batch_size: int
+    batch_size : int
+    locate_anything_batch_size : int
+    gemma_batch_size : int
     interval_seconds: int
 
     confidence_threshold: float
@@ -478,6 +481,8 @@ def load_config(
 
         gemma_model_id=raw["scene_understanding"]["gemma_model_id"],
 
+        qwen_model_id=raw["scene_understanding"]["qwen_model_id"],
+
         smolvlm_model_id=raw["scene_understanding"]["smolvlm_model_id"],
 
         embedding_model_id=raw["ontology_reasoning"]["embedding"]["model_id"],
@@ -519,6 +524,8 @@ def load_config(
 
         num_images=raw["num_images"],
         batch_size=raw["batch_size"],
+        gemma_batch_size=raw["gemma_batch_size"],
+        locate_anything_batch_size=raw["locate_anything_batch_size"],
         interval_seconds=raw["interval_seconds"],
 
         confidence_threshold=raw["confidence_threshold"],

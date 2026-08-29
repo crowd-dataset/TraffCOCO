@@ -1,6 +1,22 @@
+"""
+qwen.py
+
+Local Qwen3-VL backend for the Scene Understanding stage.
+
+This implementation conforms to the existing BaseVLM interface:
+
+    load()
+    unload()
+    infer(image_path, prompt)
+
+The SceneUnderstandingEngine owns the model lifecycle. This class must
+therefore NOT load the model in __init__().
+"""
+
 from __future__ import annotations
 
-import logging
+import gc
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,20 +28,26 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
 )
 
+from custom_logger import CustomLogger
+
 from .base_vlm import BaseVLM
 
-logger = logging.getLogger(__name__)
+logger = CustomLogger(__name__)
 
 
 MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 
 
-class QwenVLM(BaseVLM):
+class QwenVL(BaseVLM):
     """
-    Qwen3-VL backend for traffic scene understanding.
+    Qwen3-VL-8B-Instruct backend.
 
-    Loads Qwen3-VL locally through Hugging Face Transformers and
-    exposes the same interface expected by the VLM pipeline.
+    The class follows the common BaseVLM lifecycle used by the pipeline:
+
+        model = QwenVL(...)
+        model.load()
+        response = model.infer(image_path, prompt)
+        model.unload()
     """
 
     def __init__(
@@ -35,16 +57,50 @@ class QwenVLM(BaseVLM):
         dtype: torch.dtype = torch.bfloat16,
         quantized: bool = True,
         attn_implementation: str = "flash_attention_2",
+        max_new_tokens: int = 3000,
     ) -> None:
+
+        super().__init__(config=None)
 
         self.model_id = model_id
         self.device = device
         self.dtype = dtype
         self.quantized = quantized
         self.attn_implementation = attn_implementation
+        self.max_new_tokens = max_new_tokens
+
+        self.model = None
+        self.processor = None
+        self.loaded = False
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def load(self) -> None:
+        """
+        Load Qwen processor and model into memory.
+        """
+
+        if self.loaded:
+            logger.info(
+                "Qwen '{}' is already loaded.",
+                self.model_id,
+            )
+            return
+
+        logger.info("=" * 80)
+        logger.info("LOADING QWEN")
+        logger.info("=" * 80)
+
+        if self.device == "cuda" and not torch.cuda.is_available():
+            logger.warning(
+                "CUDA requested but unavailable. Falling back to CPU."
+            )
+            self.device = "cpu"
 
         logger.info(
-            "Initializing Qwen VLM backend '%s'.",
+            "Loading processor: {}",
             self.model_id,
         )
 
@@ -54,7 +110,12 @@ class QwenVLM(BaseVLM):
 
         quantization_config = None
 
-        if self.quantized:
+        if self.quantized and self.device == "cuda":
+
+            logger.info(
+                "Using 4-bit Qwen quantization."
+            )
+
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
@@ -63,7 +124,7 @@ class QwenVLM(BaseVLM):
             )
 
         model_kwargs: dict[str, Any] = {
-            "device_map": "auto",
+            "device_map": "auto" if self.device == "cuda" else self.device,
             "dtype": self.dtype,
         }
 
@@ -77,49 +138,102 @@ class QwenVLM(BaseVLM):
                 self.attn_implementation
             )
 
+        logger.info(
+            "Loading model: {}",
+            self.model_id,
+        )
+
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             self.model_id,
             **model_kwargs,
         )
 
         self.model.eval()
+        self.loaded = True
 
         logger.info(
-            "Qwen VLM loaded successfully."
+            "Qwen loaded successfully: {}",
+            self.model_id,
         )
+
+        if torch.cuda.is_available():
+            logger.info(
+                "GPU Allocated : {:.2f} GB",
+                torch.cuda.memory_allocated() / (1024 ** 3),
+            )
+
+            logger.info(
+                "GPU Reserved  : {:.2f} GB",
+                torch.cuda.memory_reserved() / (1024 ** 3),
+            )
+
+    def unload(self) -> None:
+        """
+        Release Qwen model and CUDA memory.
+        """
+
+        if not self.loaded and self.model is None:
+            return
 
         logger.info(
-            "Model device: %s",
-            self.model.device,
+            "Unloading Qwen '{}'.",
+            self.model_id,
         )
+
+        self.model = None
+        self.processor = None
+        self.loaded = False
+
+        gc.collect()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
 
         logger.info(
-            "Quantized: %s",
-            self.quantized,
+            "Qwen unloaded."
         )
 
-        logger.info(
-            "Attention: %s",
-            getattr(
-                self.model.config,
-                "_attn_implementation",
-                "unknown",
-            ),
-        )
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
 
-    def generate(
+    def infer(
         self,
-        image: Image.Image | str | Path,
+        image_path: Path,
         prompt: str,
-        max_new_tokens: int = 3000,
-        **kwargs: Any,
     ) -> str:
         """
-        Generate a response for a single image.
+        Perform Scene Understanding on a single image.
+
+        This signature intentionally matches BaseVLM exactly.
         """
 
-        if isinstance(image, (str, Path)):
-            image = Image.open(image).convert("RGB")
+        if not self.loaded or self.model is None:
+            raise RuntimeError(
+                "Qwen model is not loaded. Call load() before infer()."
+            )
+
+        if self.processor is None:
+            raise RuntimeError(
+                "Qwen processor is not loaded."
+            )
+
+        image_path = Path(image_path)
+
+        if not image_path.exists():
+            raise FileNotFoundError(
+                f"Qwen image not found: {image_path}"
+            )
+
+        logger.info(
+            "Qwen image: {}",
+            image_path.name,
+        )
+
+        image = Image.open(
+            image_path,
+        ).convert("RGB")
 
         messages = [
             {
@@ -137,6 +251,8 @@ class QwenVLM(BaseVLM):
             }
         ]
 
+        # Qwen's processor constructs the multimodal input from the
+        # chat template and image.
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -145,23 +261,29 @@ class QwenVLM(BaseVLM):
             return_tensors="pt",
         )
 
-        device = self.model.device
+        input_device = self._input_device()
 
         inputs = {
-            key: value.to(device)
+            key: value.to(input_device)
             if torch.is_tensor(value)
             else value
             for key, value in inputs.items()
         }
 
-        with torch.no_grad():
+        start_time = time.perf_counter()
+
+        with torch.inference_mode():
+
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=self.max_new_tokens,
                 do_sample=False,
                 use_cache=True,
-                **kwargs,
             )
+
+        generation_time = (
+            time.perf_counter() - start_time
+        )
 
         input_length = inputs["input_ids"].shape[-1]
 
@@ -173,131 +295,90 @@ class QwenVLM(BaseVLM):
             clean_up_tokenization_spaces=False,
         )[0]
 
+        generated_tokens = generated_ids.shape[-1]
+
+        logger.info(
+            "Qwen generation completed in {:.2f}s.",
+            generation_time,
+        )
+
+        logger.info(
+            "Generated Tokens : {}",
+            generated_tokens,
+        )
+
         return response
 
-    def generate_batch(
+    # ------------------------------------------------------------------
+    # Optional batch inference
+    # ------------------------------------------------------------------
+
+    def infer_batch(
         self,
-        images: list[Image.Image | str | Path],
-        prompt: str,
-        max_new_tokens: int = 3000,
-        **kwargs: Any,
+        image_paths: list[Path],
+        prompts: list[str],
     ) -> list[str]:
         """
-        Generate responses for a batch of images.
+        Batch interface expected by SceneUnderstandingEngine.
+
+        The engine supplies image_paths and prompts as keyword arguments.
+        Inference is intentionally performed one image at a time to avoid
+        unnecessary GPU memory pressure with Qwen3-VL-8B.
         """
 
-        pil_images: list[Image.Image] = []
-
-        for image in images:
-
-            if isinstance(image, (str, Path)):
-                image = Image.open(image).convert("RGB")
-
-            pil_images.append(image)
-
-        messages = []
-
-        for image in pil_images:
-            messages.append(
-                [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "image": image,
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt,
-                            },
-                        ],
-                    }
-                ]
+        if len(image_paths) != len(prompts):
+            raise ValueError(
+                f"Number of images ({len(image_paths)}) does not match "
+                f"number of prompts ({len(prompts)})."
             )
 
-        inputs = []
+        responses: list[str] = []
 
-        for message in messages:
-            processed = self.processor.apply_chat_template(
-                message,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
-
-            inputs.append(processed)
-
-        # Qwen's multimodal processor handles batched image/text
-        # inputs more reliably when constructed directly.
-        chat_messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    },
-                ],
-            }
-        ]
-
-        chat_prompt = self.processor.apply_chat_template(
-            chat_messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        prompts = [chat_prompt] * len(pil_images)
-
-        batch_inputs = self.processor(
-            text=prompts,
-            images=pil_images,
-            padding=True,
-            return_tensors="pt",
-        )
-
-        device = self.model.device
-
-        batch_inputs = {
-            key: value.to(device)
-            if torch.is_tensor(value)
-            else value
-            for key, value in batch_inputs.items()
-        }
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **batch_inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                use_cache=True,
-                **kwargs,
-            )
-
-        input_lengths = batch_inputs["attention_mask"].sum(
-            dim=1
-        )
-
-        responses = []
-
-        for output, input_length in zip(
-            outputs,
-            input_lengths,
+        for image_path, prompt in zip(
+            image_paths,
+            prompts,
         ):
-
-            generated = output[int(input_length):]
-
-            response = self.processor.decode(
-                generated,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
+            response = self.infer(
+                image_path=Path(image_path),
+                prompt=prompt,
             )
 
             responses.append(response)
 
         return responses
+
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
+
+    def _input_device(self) -> torch.device:
+        """
+        Determine the device to which processor tensors should be moved.
+
+        For device_map='auto', model.device normally points to the primary
+        execution device. Fall back to the first model parameter if needed.
+        """
+
+        if self.device == "cuda" and torch.cuda.is_available():
+            try:
+                return self.model.device
+            except Exception:
+                pass
+
+            try:
+                return next(
+                    self.model.parameters()
+                ).device
+            except StopIteration:
+                return torch.device("cuda")
+
+        return torch.device("cpu")
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"model='{self.model_id}', "
+            f"loaded={self.loaded}, "
+            f"device={self.device}, "
+            f"quantized={self.quantized})"
+        )

@@ -478,11 +478,6 @@ Schema A
 {
     "object_id": integer,
     "observed_object": "...",
-    "object_group":
-        vehicle |
-        infrastructure |
-        animal |
-        traffic_objects,
     "description": "..."
 }
 

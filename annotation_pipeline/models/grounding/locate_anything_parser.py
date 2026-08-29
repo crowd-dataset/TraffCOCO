@@ -730,52 +730,112 @@ class LocateAnythingParser:
             "car": {
                 "passenger car",
                 "car",
+                "vehicle",
             },
             "passenger car": {
                 "passenger car",
                 "car",
+                "vehicle",
+            },
+            "vehicle": {
+                "passenger car",
+                "car",
+                "van",
+                "truck",
+                "bus",
+                "vehicle",
             },
             "road marking": {
                 "road marking",
                 "road markings",
+                "lane divider",
+                "lane divider broken",
+                "dashed lane divider",
+                "lane boundary",
+                "marking",
             },
             "road markings": {
                 "road marking",
                 "road markings",
+                "lane divider",
+                "lane divider broken",
+                "dashed lane divider",
+                "lane boundary",
+                "marking",
             },
             "street light": {
                 "street light",
                 "streetlight",
                 "lamp post",
                 "light pole",
+                "street lamp",
             },
             "streetlight": {
                 "street light",
                 "streetlight",
                 "lamp post",
                 "light pole",
+                "street lamp",
             },
             "truck": {
                 "truck",
                 "lorry",
+                "vehicle",
             },
             "lorry": {
                 "truck",
                 "lorry",
+                "vehicle",
             },
             "traffic sign": {
                 "traffic sign",
                 "road sign",
+                "guide sign",
+                "warning sign",
+                "regulatory traffic sign",
+                "bilingual road sign",
             },
             "road sign": {
                 "traffic sign",
                 "road sign",
+                "guide sign",
+                "warning sign",
+                "regulatory traffic sign",
+                "bilingual road sign",
+            },
+            "bilingual road sign": {
+                "traffic sign",
+                "road sign",
+                "guide sign",
+                "bilingual road sign",
+            },
+            "traffic signal": {
+                "traffic signal",
+                "traffic light",
+                "signal head",
+            },
+            "traffic light": {
+                "traffic signal",
+                "traffic light",
+                "signal head",
+            },
+            "bus": {
+                "bus",
+                "city bus",
+                "vehicle",
             },
             "van": {
                 "van",
+                "vehicle",
             },
             "building": {
                 "building",
+            },
+            "marking": {
+                "marking",
+                "road marking",
+                "lane divider",
+                "dashed lane divider",
             },
         }
 
@@ -800,9 +860,22 @@ class LocateAnythingParser:
 
         name = name.strip()
 
-        # Remove accidental model-generated wrappers.
+        # Remove accidental model-generated wrappers such as:
+        # "<948> marking" or "object name: passenger car"
         name = re.sub(
             r"^(?:object\s+name|object|name)\s*:\s*",
+            "",
+            name,
+            flags=re.IGNORECASE,
+        )
+        name = re.sub(
+            r"^<\s*[-+]?\d+(?:\.\d+)?\s*>\s*",
+            "",
+            name,
+            flags=re.IGNORECASE,
+        )
+        name = re.sub(
+            r"^(?:[-+]?\d+(?:\.\d+)?\s*[,;:.-]\s*)+",
             "",
             name,
             flags=re.IGNORECASE,
