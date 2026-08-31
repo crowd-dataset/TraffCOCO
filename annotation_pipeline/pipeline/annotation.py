@@ -336,6 +336,187 @@ class AnnotationEngine:
     # ================================================================
 
     @staticmethod
+    def _bbox_iou(
+        bbox_a: list[float],
+        bbox_b: list[float],
+    ) -> float:
+        """Calculate IoU between two bounding boxes."""
+
+        ax1, ay1, ax2, ay2 = bbox_a
+        bx1, by1, bx2, by2 = bbox_b
+
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+
+        if ix2 <= ix1 or iy2 <= iy1:
+            return 0.0
+
+        intersection = (
+            (ix2 - ix1) *
+            (iy2 - iy1)
+        )
+
+        area_a = (
+            (ax2 - ax1) *
+            (ay2 - ay1)
+        )
+
+        area_b = (
+            (bx2 - bx1) *
+            (by2 - by1)
+        )
+
+        union = area_a + area_b - intersection
+
+        if union <= 0:
+            return 0.0
+
+        return intersection / union
+
+    def _remove_unreadable_duplicates(
+        self,
+        grounding_detections: list[dict[str, Any]],
+        scene_object_by_id: dict[int, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Remove an unreadable_traffic_sign detection when the same physical
+        sign is also detected with a specific traffic-sign class.
+
+        A detection is considered the same physical object when its bbox
+        has high IoU with another detection.
+
+        Specific ontology classification always wins over the generic
+        unreadable_traffic_sign classification.
+        """
+
+        unreadable_indices: set[int] = set()
+
+        for i, detection in enumerate(grounding_detections):
+
+            object_id = self._coerce_object_id(
+                detection.get("object_id")
+            )
+
+            if object_id is None:
+                continue
+
+            scene_object = scene_object_by_id.get(
+                object_id
+            )
+
+            if scene_object is None:
+                continue
+
+            class_name = self._get_class_name(
+                scene_object
+            )
+
+            if (
+                class_name
+                and self._normalize_grounding_label(class_name)
+                == "unreadable traffic sign"
+            ):
+                unreadable_indices.add(i)
+
+        to_remove: set[int] = set()
+
+        for unreadable_index in unreadable_indices:
+
+            unreadable = grounding_detections[
+                unreadable_index
+            ]
+
+            unreadable_bbox = self._validate_bbox(
+                unreadable.get("bbox")
+            )
+
+            if unreadable_bbox is None:
+                continue
+
+            for other_index, other in enumerate(
+                grounding_detections
+            ):
+
+                if other_index == unreadable_index:
+                    continue
+
+                if other_index in unreadable_indices:
+                    continue
+
+                other_bbox = self._validate_bbox(
+                    other.get("bbox")
+                )
+
+                if other_bbox is None:
+                    continue
+
+                iou = self._bbox_iou(
+                    unreadable_bbox,
+                    other_bbox,
+                )
+
+                if iou < 0.5:
+                    continue
+
+                other_id = self._coerce_object_id(
+                    other.get("object_id")
+                )
+
+                if other_id is None:
+                    continue
+
+                other_scene_object = (
+                    scene_object_by_id.get(
+                        other_id
+                    )
+                )
+
+                if other_scene_object is None:
+                    continue
+
+                other_class = self._get_class_name(
+                    other_scene_object
+                )
+
+                if not other_class:
+                    continue
+
+                normalized_other_class = (
+                    self._normalize_grounding_label(
+                        other_class
+                    )
+                )
+
+                if (
+                    normalized_other_class
+                    != "unreadable traffic sign"
+                ):
+                    logger.info(
+                        "Removing duplicate unreadable "
+                        "traffic-sign detection because "
+                        "specific class '%s' overlaps it "
+                        "(IoU=%.2f).",
+                        other_class,
+                        iou,
+                    )
+
+                    to_remove.add(
+                        unreadable_index
+                    )
+
+                    break
+
+        return [
+            detection
+            for index, detection in enumerate(
+                grounding_detections
+            )
+            if index not in to_remove
+        ]
+
+    @staticmethod
     def _get_grounding_detections(
         cache: dict[str, Any],
     ) -> list[dict[str, Any]]:
@@ -693,6 +874,11 @@ class AnnotationEngine:
             scene_object_by_id.setdefault(
                 object_id,
                 scene_object,
+            )
+
+            grounding_detections = self._remove_unreadable_duplicates(
+                grounding_detections=grounding_detections,
+                scene_object_by_id=scene_object_by_id,
             )
 
         # ------------------------------------------------------------

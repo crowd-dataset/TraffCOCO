@@ -29,7 +29,7 @@ import time
 from custom_logger import CustomLogger
 from logmod import logs
 
-from annotation_pipeline.cache.pipeline_cache import PipelineCache
+from annotation_pipeline.cache.pipeline_cache import PipelineCache, PipelineStage
 from annotation_pipeline.configs.settings import load_config
 from annotation_pipeline.models.vlm.model_loader import (
     create_scene_model,
@@ -181,6 +181,69 @@ def run_annotation_stage(
         final_detections,
         visualization_path,
     )
+
+
+def clear_grounding_for_retry(
+    cache: PipelineCache,
+    image_name: str,
+) -> None:
+    """
+    Reset all grounding-stage data for one image before re-running
+    Locate Anything.
+
+    Grounding results are stored by APPENDING to a list per object
+    (see PipelineCache.add_grounding_result), plus a top-level orphan
+    bucket for unmatched detections. Simply re-running Locate Anything
+    without clearing these first would pile the retry's detections on
+    top of the original over-triggering results instead of replacing
+    them -- which would guarantee the retry produces an even higher
+    count than the first pass, defeating its entire purpose.
+
+    This only resets in-memory grounding state. The on-disk pipeline
+    cache JSON that AnnotationEngine reads is refreshed separately,
+    when LocateAnythingEngine._process_batch calls
+    cache.save_image_cache(..., stage="grounding") again during the
+    retry pass (gated by config.pipeline.save_intermediate_cache,
+    the same flag that produced the original cache files read by the
+    first annotation pass).
+    """
+
+    image_cache = getattr(cache, "_cache", {}).get(image_name)
+
+    if not isinstance(image_cache, dict):
+        logger.warning(
+            "clear_grounding_for_retry: no cache entry found for '{}'.",
+            image_name,
+        )
+        return
+
+    cleared_objects = 0
+
+    for key, entry in image_cache.items():
+
+        if key in ("grounding_detections", "_unmatched_grounding"):
+            continue
+
+        if not isinstance(entry, dict):
+            continue
+
+        if PipelineStage.GROUNDING.value in entry:
+            entry[PipelineStage.GROUNDING.value] = []
+            cleared_objects += 1
+
+    # Top-level orphan buckets (see PipelineCache.add_unmatched_grounding_result
+    # and the legacy "grounding_detections" list written by
+    # LocateAnythingEngine._update_pipeline_cache).
+    image_cache["grounding_detections"] = []
+    image_cache["_unmatched_grounding"] = []
+
+    logger.info(
+        "Cleared grounding state for '{}' before retry "
+        "({} scene object(s) reset).",
+        image_name,
+        cleared_objects,
+    )
+
 
 # ============================================================================
 # Main Pipeline
@@ -727,9 +790,19 @@ def main() -> None:
         stage_results: dict[str, dict[str, Any]] = {}
         processed_count = 0
 
+        RETRY_THRESHOLD = 30
+
         for image_path in image_paths:
+
             processed_count += 1
+            retry_attempted = False
+
             try:
+
+                # ------------------------------------------------------
+                # First annotation pass
+                # ------------------------------------------------------
+
                 final_detections, visualization_path = (
                     run_annotation_stage(
                         annotation_engine=annotation_engine,
@@ -741,6 +814,100 @@ def main() -> None:
                     "Annotation completed for %s",
                     image_path.name,
                 )
+
+                logger.info(
+                    "Initial final detections: %d",
+                    len(final_detections),
+                )
+
+                # ------------------------------------------------------
+                # Retry ONCE if detection count is abnormal
+                # ------------------------------------------------------
+
+                if (
+                    len(final_detections) > RETRY_THRESHOLD
+                    and not retry_attempted
+                ):
+
+                    retry_attempted = True
+
+                    logger.warning(
+                        "Detection count for '%s' is %d (> %d). "
+                        "Running one Locate Anything retry.",
+                        image_path.name,
+                        len(final_detections),
+                        RETRY_THRESHOLD,
+                    )
+
+                    if "grounding_engine" not in locals():
+
+                        raise RuntimeError(
+                            "Grounding engine is not available for retry."
+                        )
+
+                    # --------------------------------------------------
+                    # Remove previous grounding results
+                    # --------------------------------------------------
+
+                    clear_grounding_for_retry(
+                        cache=cache,
+                        image_name=image_path.name,
+                    )
+
+                    # --------------------------------------------------
+                    # Second Locate Anything pass
+                    # --------------------------------------------------
+
+                    grounding_engine.process_images(
+                        image_paths=[image_path],
+                        cache=cache,
+                    )
+
+                    logger.info(
+                        "Locate Anything retry completed for '%s'.",
+                        image_path.name,
+                    )
+
+                    # --------------------------------------------------
+                    # Re-run annotation using retry results
+                    # --------------------------------------------------
+
+                    final_detections, visualization_path = (
+                        run_annotation_stage(
+                            annotation_engine=annotation_engine,
+                            image_path=image_path,
+                        )
+                    )
+
+                    logger.info(
+                        "Retry annotation completed for %s",
+                        image_path.name,
+                    )
+
+                    logger.info(
+                        "Retry final detections: %d",
+                        len(final_detections),
+                    )
+
+                    # --------------------------------------------------
+                    # IMPORTANT:
+                    # Do NOT retry again even if this is still >30.
+                    # --------------------------------------------------
+
+                    if len(final_detections) > RETRY_THRESHOLD:
+
+                        logger.warning(
+                            "Retry for '%s' still produced %d detections "
+                            "(> %d). Accepting the retry result without "
+                            "another retry.",
+                            image_path.name,
+                            len(final_detections),
+                            RETRY_THRESHOLD,
+                        )
+
+                # ------------------------------------------------------
+                # Final result
+                # ------------------------------------------------------
 
                 logger.info(
                     "Final detections: %d",
@@ -755,15 +922,19 @@ def main() -> None:
                 stage_results[image_path.name] = {
                     "status": "completed",
                     "detections": len(final_detections),
-                    "visualization_path": str(visualization_path),
+                    "visualization_path": str(
+                        visualization_path
+                    ),
                 }
+
                 results[image_path.name] = {
                     "annotation": stage_results[image_path.name],
                 }
 
             except Exception as exc:
+
                 logger.error(
-                    "Annotation failed for {}",
+                    "Annotation failed for %s",
                     image_path.name,
                 )
 
@@ -771,12 +942,19 @@ def main() -> None:
                     "status": "failed",
                     "error": str(exc),
                 }
+
                 results[image_path.name] = {
-                    "annotation": stage_results[image_path.name],
+                    "annotation": stage_results[
+                        image_path.name
+                    ],
                 }
 
                 failed_images.append(
-                    (image_path.name, "Annotation", str(exc)),
+                    (
+                        image_path.name,
+                        "Annotation",
+                        str(exc),
+                    ),
                 )
     # ------------------------------------------------------------------
     # Pipeline Complete

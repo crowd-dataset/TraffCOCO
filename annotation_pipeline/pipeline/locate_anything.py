@@ -144,24 +144,24 @@ class LocateAnythingEngine:
 
         start_time = time.perf_counter()
 
-        batch_size = self.config.pipeline.batch_size
+        locate_anything_batch_size = self.config.pipeline.locate_anything_batch_size
 
         for batch_start in range(
             0,
             len(image_paths),
-            batch_size,
+            locate_anything_batch_size,
         ):
 
             batch = image_paths[
                 batch_start:
-                batch_start + batch_size
+                batch_start + locate_anything_batch_size
             ]
 
             logger.info(
                 "Processing batch ({}/{})",
-                batch_start // batch_size + 1,
-                (len(image_paths) + batch_size - 1)
-                // batch_size,
+                batch_start // locate_anything_batch_size + 1,
+                (len(image_paths) + locate_anything_batch_size - 1)
+                // locate_anything_batch_size,
             )
 
             self._process_batch(

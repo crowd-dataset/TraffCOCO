@@ -72,6 +72,44 @@ class CandidateRanker:
             len(candidates),
         )
 
+        # ----------------------------------------------------------
+        # Generic super-category constraint
+        # ----------------------------------------------------------
+
+        query_category = self._normalize(
+            query.object_group
+        )
+
+        if query_category:
+
+            compatible_candidates = [
+                candidate
+                for candidate in candidates
+                if self._is_category_compatible(
+                    query,
+                    candidate,
+                )
+            ]
+
+            if compatible_candidates:
+
+                logger.info(
+                    "Category restriction: '%s' -> %d/%d candidates.",
+                    query_category,
+                    len(compatible_candidates),
+                    len(candidates),
+                )
+
+                candidates = compatible_candidates
+
+            else:
+
+                logger.warning(
+                    "No ontology candidates match object_group='%s'. "
+                    "Keeping original candidate set.",
+                    query_category,
+                )
+
         for candidate in candidates:
 
             candidate.matched_attributes = {}
@@ -96,6 +134,27 @@ class CandidateRanker:
 
             )
 
+            class_identity = self._normalize(
+                query.observed_object
+            )
+
+            candidate_class = self._normalize(
+                candidate.entry.class_name
+            )
+
+            if class_identity and candidate_class:
+
+                if class_identity == candidate_class:
+
+                    candidate.final_score += 0.20
+
+                elif (
+                    class_identity in candidate_class
+                    and class_identity != candidate_class
+                ):
+
+                    candidate.final_score -= 0.20
+
             logger.debug(
                 "{} | embedding={:.3f} | attribute={:.3f} | final={:.3f}",
                 candidate.entry.class_name,
@@ -114,6 +173,134 @@ class CandidateRanker:
 
         return candidates
 
+    def _is_category_compatible(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> bool:
+        """
+        Check whether the ontology candidate belongs to the same
+        broad semantic category as the observed scene object.
+
+        Scene Understanding provides:
+            query.object_group
+
+        Ontology provides:
+            candidate.entry.data["super_category"]
+
+        These two fields use the same controlled vocabulary.
+        """
+
+        query_category = self._normalize(
+            query.object_group
+        )
+
+        candidate_category = self._normalize(
+            candidate.entry.data.get(
+                "super_category",
+                "",
+            )
+        )
+
+        if not query_category or not candidate_category:
+            return True
+
+        return query_category == candidate_category
+
+    def _score_class_identity(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> tuple[float, float]:
+        """
+        Strong class-identity signal.
+
+        Exact object identity is intentionally stronger than fuzzy
+        semantic similarity. This prevents compound ontology classes
+        such as 'bus_lane_sign' from beating the actual 'bus' class
+        merely because they contain the same token.
+        """
+
+        observed = self._normalize(
+            query.observed_object
+        )
+
+        class_name = self._normalize(
+            candidate.entry.class_name
+        )
+
+        if not observed or not class_name:
+            return 0.0, 0.0
+
+        weight = 1.0
+
+        # Exact class identity.
+        if observed == class_name:
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "exact",
+                "observed": observed,
+                "candidate": class_name,
+            }
+
+            return weight, weight
+
+        # Token-level comparison.
+        observed_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                observed,
+            )
+        )
+
+        candidate_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                class_name,
+            )
+        )
+
+        # The observed class is only one component of a more specific
+        # compound class, e.g. bus -> bus_lane_sign.
+        if (
+            observed_tokens
+            and observed_tokens.issubset(candidate_tokens)
+            and observed != class_name
+        ):
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "compound_mismatch",
+                "observed": observed,
+                "candidate": class_name,
+            }
+
+            return 0.0, weight
+
+        # Otherwise use a weak lexical similarity.
+        similarity = self._similarity(
+            observed,
+            class_name,
+        )
+
+        if similarity >= 0.85:
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "similar",
+                "observed": observed,
+                "candidate": class_name,
+                "similarity": round(
+                    similarity,
+                    3,
+                ),
+            }
+
+            return similarity * 0.25, weight
+
+        return 0.0, weight
+
     
     # ==========================================================
     # Evidence Fusion
@@ -129,6 +316,10 @@ class CandidateRanker:
         """
 
         evidence = [
+            self._score_class_identity(
+                query,
+                candidate,
+            ),
             self._score_visual(
                 query,
                 candidate,
@@ -301,11 +492,35 @@ class CandidateRanker:
                 self._similarity(value, observed),
             )
 
-            if observed in value:
-                similarity = max(similarity, 0.90)
+            observed_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    observed,
+                )
+            )
 
-            if value in observed:
-                similarity = max(similarity, 0.90)
+            value_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    value,
+                )
+            )
+
+            if observed_tokens == value_tokens:
+                similarity = max(
+                    similarity,
+                    1.0,
+                )
+
+            elif (
+                observed_tokens
+                and observed_tokens.issubset(value_tokens)
+            ):
+                # Do NOT treat a compound class as an exact match.
+                similarity = max(
+                    similarity,
+                    0.55,
+                )
 
             best = max(best, similarity)
 
@@ -936,27 +1151,49 @@ class CandidateRanker:
 
         for word in words:
 
-            matched_flag, similarity = self._fuzzy_match(
-                observed,
-                [word],
-            )
+            word_normalized = self._normalize(word)
 
-            if matched_flag:
-                matched.append(
-                    {
-                        "word": word,
-                        "similarity": round(similarity, 3),
-                    }
-                )
-                best_similarity = max(best_similarity, similarity)
+            if observed == word_normalized:
 
-            elif word in description:
                 matched.append(
                     {
                         "word": word,
                         "similarity": 1.0,
                     }
                 )
+
+                best_similarity = 1.0
+
+            elif (
+                observed
+                and word_normalized
+                and observed in word_normalized
+            ):
+
+                # Compound semantic term. Keep this weak.
+                similarity = 0.35
+
+                matched.append(
+                    {
+                        "word": word,
+                        "similarity": similarity,
+                    }
+                )
+
+                best_similarity = max(
+                    best_similarity,
+                    similarity,
+                )
+
+            elif word_normalized in description:
+
+                matched.append(
+                    {
+                        "word": word,
+                        "similarity": 1.0,
+                    }
+                )
+
                 best_similarity = 1.0
 
         if matched:

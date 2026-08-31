@@ -25,6 +25,7 @@ from custom_logger import CustomLogger
 from annotation_pipeline.configs.settings import PipelineConfig
 
 from annotation_pipeline.models.vlm.gemma import GemmaVL
+from annotation_pipeline.models.vlm.gemma4 import Gemma4VL
 from annotation_pipeline.models.vlm.smolvlm import SmolVLM
 
 logger = CustomLogger(__name__)
@@ -32,6 +33,7 @@ logger = CustomLogger(__name__)
 
 _SUPPORTED_MODELS = {
     "gemma": GemmaVL,
+    "gemma4": Gemma4VL,
     "smolvlm": SmolVLM,
 }
 
@@ -68,13 +70,14 @@ def create_scene_model(config: PipelineConfig):
     )
 
     if backend == "gemma":
-
         model_id = config.models.gemma_model_id
 
+    elif backend == "gemma4":
+        model_id = config.models.gemma4_model_id
+
     elif backend == "smolvlm":
-
         model_id = config.models.smolvlm_model_id
-
+        
     else:
         # Defensive programming (should never happen)
         raise RuntimeError(

@@ -94,11 +94,12 @@ source .venv/bin/activate
 
 Users can look into **mapping.csv** to see the available continents, countries, states, localities/cities, video IDs, time categories, and vehicle categories before updating the configuration.
 
-**Step 9:** Run the code for extracting the frame:
-```command line
-python3 frame-extractor.py
+**Step 9:** Use the active project entry point for the current annotation pipeline instead of the legacy frame extractor:
+```bash
+uv run python main.py --images 5
 ```
 
+> The repository currently implements the VLM-first traffic-scene annotation pipeline in `main.py`. The older `frame-extractor.py` flow is not the active runtime path for this codebase.
 
 ### Configuration of project
 
@@ -142,6 +143,106 @@ Example:
   }
 }
 ```
+
+## Current TraffCOCO pipeline architecture
+
+The repository in its current state is not a database or frame-extraction project in the classic sense. It is a traffic-scene annotation pipeline built around a staged VLM + ontology + grounding workflow.
+
+The active runtime flow defined in `main.py` is:
+
+```text
+Random Frame Download (if enabled)
+        │
+        ▼
+Image Discovery
+        │
+        ▼
+Scene Understanding
+        │
+        ▼
+Pipeline Cache
+        │
+        ▼
+Ontology Reasoning
+        │
+        ▼
+Pipeline Cache
+        │
+        ▼
+Prompt Builder
+        │
+        ▼
+Locate Anything grounding
+        │
+        ▼
+Annotation / ID reconciliation
+        │
+        ▼
+Final visualization
+```
+
+### Stage responsibilities
+
+- `SceneUnderstandingEngine` reads the configured image set and performs object discovery using the selected vision-language model.
+- `OntologyEngine` reads each discovered scene object from the pipeline cache, resolves ontology metadata, and stores the canonical `class_id`, `class_name`, and `grounding_prompt`.
+- `PromptBuilder` constructs the Locate Anything category prompt from the ontology-grounded labels rather than reconstructing categories from noisy scene output.
+- `LocateAnythingEngine` runs the grounding model and saves raw, parsed, and visualization outputs to the configured outputs folders.
+- `AnnotationEngine` consumes the cached scene + ontology + grounding data and produces the final per-object detections used for visualization and downstream annotation work.
+
+### Architectural rules enforced by the current code
+
+The current implementation makes these rules explicit:
+
+- `ontology` is the source of truth for the canonical class identity.
+- `grounding_prompt` is authoritative for the prompt sent to Locate Anything.
+- `object_id=None` from Locate Anything is not treated as a hard failure; it is resolved only when the canonical scene cache provides a valid same-label object ID.
+- The final annotation flow must prefer the canonical object ID already associated with the object in the pipeline cache.
+- Repeated valid bounding boxes for the same object are retained instead of being deduplicated away.
+
+This is implemented in `annotation_pipeline/pipeline/annotation.py`, which merges cache-grounding results from per-object entries and unmatched detections, validates bounding boxes, and resolves final object IDs before drawing the annotation overlay.
+
+### Runtime configuration
+
+The active runtime is driven by `default.config` and loaded via `annotation_pipeline/configs/settings.py`. Key flags include:
+
+- `download_random_frames`
+- `run_scene_understanding`
+- `run_ontology_reasoning`
+- `run_prompt_builder`
+- `run_grounding`
+- `run_segmentation`
+- `run_annotation`
+- `save_intermediate_cache`
+- `save_pipeline_cache`
+- `save_raw_outputs`
+- `save_visualizations`
+
+The project also uses the `uv` lockfile and `pyproject.toml` as the canonical dependency basis for the Python environment.
+
+### Typical execution
+
+From the repository root:
+
+```bash
+uv sync --frozen
+source .venv/bin/activate
+uv run python main.py --images 5
+```
+
+This reads the random frames directory, builds the scene-understanding cache, runs ontology reasoning, grounds objects with Locate Anything, and writes the final visualized annotation outputs under the configured output folders.
+
+### Output structure
+
+The current project writes intermediate and final artifacts under `annotation_pipeline/outputs` and related subfolders, including:
+
+- scene cache entries
+- ontology cache entries
+- pipeline cache JSON files
+- grounding prompts and raw output logs
+- final annotated visuals
+- annotation outputs
+
+The repository is therefore best understood as a structured annotation-generation pipeline rather than a single standalone data-extraction script.
 
 ## License
 This project is licensed under the MIT License - see the LICENSE file for details.

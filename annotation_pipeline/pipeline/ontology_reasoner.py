@@ -121,8 +121,51 @@ class OntologyReasoner:
             candidates=candidates,
         )
 
+        # ----------------------------------------------------------
+        # Unreadable traffic sign override
+        # ----------------------------------------------------------
+
+        if self._is_unreadable_traffic_sign(query):
+
+            unreadable_candidate = next(
+                (
+                    candidate
+                    for candidate in ranked_candidates
+                    if self._normalize(
+                        candidate.entry.class_name
+                    ) == "unreadable traffic sign"
+                ),
+                None,
+            )
+
+            if unreadable_candidate is not None:
+
+                logger.info(
+                    "Traffic sign pictogram/text is unreadable. "
+                    "Overriding specific ontology prediction '{}' "
+                    "with 'unreadable_traffic_sign'.",
+                    ranked_candidates[0].entry.class_name,
+                )
+
+                predicted_class = unreadable_candidate
+
+            else:
+
+                logger.warning(
+                    "Traffic sign has unreadable pictogram, "
+                    "but 'unreadable_traffic_sign' is not present "
+                    "in the ontology."
+                )
+
+                predicted_class = ranked_candidates[0]
+
+        else:
+
+            predicted_class = ranked_candidates[0]
+
+
         result = OntologySearchResult(
-            predicted_class=ranked_candidates[0],
+            predicted_class=predicted_class,
             candidates=ranked_candidates,
             retrieval_query=query,
         )
@@ -135,9 +178,102 @@ class OntologyReasoner:
 
         return result
 
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+
+    def _normalize(
+        self,
+        value: str | None,
+    ) -> str:
+        """
+        Normalize text for ontology class comparison.
+        """
+
+        if not value:
+            return ""
+
+        return (
+            value
+            .lower()
+            .replace("_", " ")
+            .replace("-", " ")
+            .strip()
+        )
+
+
+    def _is_unreadable_traffic_sign(
+        self,
+        query: RetrievalQuery,
+    ) -> bool:
+        """
+        Return True only when the object is a traffic sign and the
+        identifying pictogram/symbol/icon is explicitly present but
+        visually unreadable or cannot be identified.
+
+        Generic uncertainty such as "unknown", "unclear", or
+        "unidentified" must not by itself trigger the override.
+        """
+
+        if self._normalize(
+            query.observed_object
+        ) != "traffic sign":
+            return False
+
+        description = self._normalize(
+            query.description
+        )
+
+        symbol = self._normalize(
+            query.symbol
+        )
+
+        text = self._normalize(
+            query.text
+        )
+
+        # ----------------------------------------------------------
+        # Explicit pictogram/symbol/icon unreadability
+        # ----------------------------------------------------------
+
+        pictogram_terms = (
+            "pictogram",
+            "symbol",
+            "icon",
+            "graphic",
+        )
+
+        unreadable_terms = (
+            "unreadable",
+            "cannot be determined",
+            "cannot be identified",
+            "not identifiable",
+            "unable to identify",
+            "too small to identify",
+            "too small to read",
+            "not readable",
+        )
+
+        # Description must explicitly connect a visual symbol/pictogram
+        # to the fact that it cannot be identified/read.
+        for pictogram_term in pictogram_terms:
+            for unreadable_term in unreadable_terms:
+                if (
+                    pictogram_term in description
+                    and unreadable_term in description
+                ):
+                    return True
+
+        # The structured symbol field is stronger evidence.
+        # Only accept explicit unreadability here.
+        if symbol:
+            if any(
+                term in symbol
+                for term in unreadable_terms
+            ):
+                return True
+
+        return False
 
     @property
     def ready(

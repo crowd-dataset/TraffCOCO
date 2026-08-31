@@ -159,6 +159,7 @@ class ModelsConfig:
     gemma_model_id: str
     smolvlm_model_id: str
     qwen_model_id: str
+    gemma4_model_id : str
 
     embedding_model_id: str
     embedding_device: str
@@ -480,6 +481,8 @@ def load_config(
         segmentation_backend=raw["segmentation_backend"],
 
         gemma_model_id=raw["scene_understanding"]["gemma_model_id"],
+
+        gemma4_model_id=raw["scene_understanding"]["gemma4_model_id"],
 
         qwen_model_id=raw["scene_understanding"]["qwen_model_id"],
 
