@@ -154,22 +154,22 @@ def run_annotation_stage(
     image_path: Path,
 ) -> tuple[list[dict], Path]:
     """
-    Run the final annotation stage for one image.
+    Run annotation and oversized-object postprocessing.
 
-    The AnnotationEngine:
-        - finds the pipeline cache corresponding to image_path
-        - reads the existing scene/ontology/grounding results
-        - matches Locate Anything grounding prompts
-        - resolves the final ontology labels
-        - creates the final visualization on the original image
-
-    Returns:
-        final_detections
-        visualization_path
+    Postprocessing happens before the final visualization is generated.
     """
 
     final_detections = annotation_engine.annotate_image(
         image_path
+    )
+
+    # --------------------------------------------------------------
+    # POSTPROCESSING
+    # --------------------------------------------------------------
+
+    final_detections = postprocess_detections(
+        image_path=image_path,
+        detections=final_detections,
     )
 
     visualization_path = (
@@ -177,11 +177,232 @@ def run_annotation_stage(
         / f"{image_path.stem}_annotated.png"
     )
 
+    # Re-render using the filtered detections.
+    annotation_engine.visualizer.visualize(
+        image_path=image_path,
+        detections=final_detections,
+        output_path=visualization_path,
+    )
+
     return (
         final_detections,
         visualization_path,
     )
 
+def postprocess_detections(
+    image_path: Path,
+    detections: list[dict],
+    min_area_ratio: float = 0.0005,
+    max_area_ratio: float = 0.30,
+    max_width_ratio: float = 0.90,
+    max_height_ratio: float = 0.50,
+    tiny_width_ratio: float = 0.02,
+    tiny_height_ratio: float = 0.06,
+) -> list[dict]:
+    """
+    Remove implausibly tiny or oversized object annotations.
+
+    Small-object filtering is deliberately conservative.
+
+    A detection is considered TOO SMALL only when BOTH:
+        bbox area / image area < min_area_ratio
+    AND
+        bbox width / image width < tiny_width_ratio
+        bbox height / image height < tiny_height_ratio
+
+    This avoids deleting legitimate small objects that are thin in one
+    dimension, such as poles, pedestrians, narrow signs, etc.
+
+    A detection is considered TOO LARGE when:
+        bbox area / image area > max_area_ratio
+
+    OR when both:
+        bbox width / image width > max_width_ratio
+        bbox height / image height > max_height_ratio
+
+    Surviving detections are not modified.
+    """
+
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
+
+    except Exception as exc:
+
+        logger.warning(
+            "Could not determine image dimensions for '{}': {}. "
+            "Skipping bbox-size postprocessing.",
+            image_path.name,
+            exc,
+        )
+
+        return detections
+
+    if image_width <= 0 or image_height <= 0:
+        return detections
+
+    image_area = image_width * image_height
+
+    filtered_detections = []
+    removed_small = 0
+    removed_large = 0
+
+    for detection in detections:
+
+        if not isinstance(detection, dict):
+            filtered_detections.append(detection)
+            continue
+
+        bbox = detection.get("bbox")
+
+        if (
+            not isinstance(bbox, (list, tuple))
+            or len(bbox) != 4
+        ):
+            filtered_detections.append(detection)
+            continue
+
+        try:
+
+            x1, y1, x2, y2 = map(
+                float,
+                bbox,
+            )
+
+        except (TypeError, ValueError):
+
+            filtered_detections.append(detection)
+            continue
+
+        bbox_width = max(
+            0.0,
+            x2 - x1,
+        )
+
+        bbox_height = max(
+            0.0,
+            y2 - y1,
+        )
+
+        bbox_area = (
+            bbox_width
+            * bbox_height
+        )
+
+        area_ratio = (
+            bbox_area
+            / image_area
+        )
+
+        width_ratio = (
+            bbox_width
+            / image_width
+        )
+
+        height_ratio = (
+            bbox_height
+            / image_height
+        )
+
+        # ==============================================================
+        # TOO SMALL
+        # ==============================================================
+
+        too_small = (
+            area_ratio < min_area_ratio
+            and width_ratio < tiny_width_ratio
+            and height_ratio < tiny_height_ratio
+        )
+
+        # ==============================================================
+        # TOO LARGE
+        # ==============================================================
+
+        too_large_by_area = (
+            area_ratio > max_area_ratio
+        )
+
+        too_large_by_dimensions = (
+            width_ratio > max_width_ratio
+            and height_ratio > max_height_ratio
+        )
+
+        too_large = (
+            too_large_by_area
+            or too_large_by_dimensions
+        )
+
+        # ==============================================================
+        # REMOVE
+        # ==============================================================
+
+        if too_small:
+
+            removed_small += 1
+
+            class_name = detection.get(
+                "class_name",
+                detection.get(
+                    "final_label",
+                    "unknown",
+                ),
+            )
+
+            logger.warning(
+                "Postprocessing removed tiny detection "
+                "'{}' from '{}': "
+                "area={:.4f}% width={:.2f}% height={:.2f}%",
+                class_name,
+                image_path.name,
+                area_ratio * 100,
+                width_ratio * 100,
+                height_ratio * 100,
+            )
+
+            continue
+
+        if too_large:
+
+            removed_large += 1
+
+            class_name = detection.get(
+                "class_name",
+                detection.get(
+                    "final_label",
+                    "unknown",
+                ),
+            )
+
+            logger.warning(
+                "Postprocessing removed oversized detection "
+                "'{}' from '{}': "
+                "area={:.2f}% width={:.1f}% height={:.1f}%",
+                class_name,
+                image_path.name,
+                area_ratio * 100,
+                width_ratio * 100,
+                height_ratio * 100,
+            )
+
+            continue
+
+        filtered_detections.append(
+            detection
+        )
+
+    logger.info(
+        "Postprocessing '{}': {} → {} detection(s). "
+        "Removed {} tiny, {} oversized.",
+        image_path.name,
+        len(detections),
+        len(filtered_detections),
+        removed_small,
+        removed_large,
+    )
+
+    return filtered_detections
 
 def clear_grounding_for_retry(
     cache: PipelineCache,
@@ -810,6 +1031,11 @@ def main() -> None:
                     )
                 )
 
+                final_detections = postprocess_detections(
+                    image_path=image_path,
+                    detections=final_detections,
+                )
+
                 logger.info(
                     "Annotation completed for %s",
                     image_path.name,
@@ -877,6 +1103,11 @@ def main() -> None:
                             annotation_engine=annotation_engine,
                             image_path=image_path,
                         )
+                    )
+
+                    final_detections = postprocess_detections(
+                        image_path=image_path,
+                        detections=final_detections,
                     )
 
                     logger.info(

@@ -189,7 +189,7 @@ class LocateAnything:
         Priority
         --------
         1. LOCATEANYTHING_RUNTIME environment variable
-        2. <project_root>/.locateanything_model
+        2. <project_root>/locateanything_runtime
         """
 
         environment_path = os.environ.get(
@@ -214,7 +214,7 @@ class LocateAnything:
 
             runtime_dir = (
                 project_root
-                / ".locateanything_model"
+                / "locateanything_runtime"
             )
 
         return runtime_dir
