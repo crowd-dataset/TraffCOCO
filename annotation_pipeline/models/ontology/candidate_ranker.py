@@ -13,6 +13,7 @@ Evidence Sources
 3. Context Evidence
 4. Semantic Evidence
 5. Knowledge Evidence
+6. Class-Specific Discriminative Cue Evidence
 
 Each module returns:
 
@@ -50,8 +51,8 @@ class CandidateRanker:
 
         self.config = config
 
-        self.embedding_weight = 0.70
-        self.attribute_weight = 0.30
+        self.embedding_weight = 0.7
+        self.attribute_weight = 0.3
 
         logger.info(
             "Initialized ontology evidence ranker."
@@ -66,6 +67,12 @@ class CandidateRanker:
         query: RetrievalQuery,
         candidates: list[CandidateMatch],
     ) -> list[CandidateMatch]:
+        """Rank ontology candidates using fused visual and semantic evidence.
+
+        Explicit discriminative cues found in the Scene Understanding
+        description are treated as evidence, rather than requiring them to
+        first appear in a structured attribute field.
+        """
 
         logger.info(
             "Ranking {} ontology candidate(s).",
@@ -94,7 +101,7 @@ class CandidateRanker:
             if compatible_candidates:
 
                 logger.info(
-                    "Category restriction: '%s' -> %d/%d candidates.",
+                    "Category restriction: '{}' -> {}/{} candidates.",
                     query_category,
                     len(compatible_candidates),
                     len(candidates),
@@ -105,10 +112,14 @@ class CandidateRanker:
             else:
 
                 logger.warning(
-                    "No ontology candidates match object_group='%s'. "
+                    "No ontology candidates match object_group='{}'. "
                     "Keeping original candidate set.",
                     query_category,
                 )
+
+        # ----------------------------------------------------------
+        # Evidence fusion
+        # ----------------------------------------------------------
 
         for candidate in candidates:
 
@@ -123,55 +134,205 @@ class CandidateRanker:
             )
 
             candidate.final_score = (
-
                 self.embedding_weight
                 * candidate.embedding_score
-
                 +
-
                 self.attribute_weight
                 * candidate.attribute_score
-
             )
 
-            class_identity = self._normalize(
-                query.observed_object
+            # ------------------------------------------------------
+            # Generic class identity
+            # ------------------------------------------------------
+
+            identity_score = self._class_identity_score(
+                query,
+                candidate,
             )
 
-            candidate_class = self._normalize(
-                candidate.entry.class_name
+            candidate.final_score += identity_score
+
+            # ------------------------------------------------------
+            # Explicit discriminative evidence
+            # ------------------------------------------------------
+            #
+            # Preserve all existing embedding, attribute, and identity
+            # scoring, while adding a bounded direct bonus when the
+            # observation contains a cue that distinguishes this candidate
+            # from closely related ontology classes.
+            #
+            # Example:
+            #   "traffic signal with a red lens visible"
+            #
+            # must be able to favor traffic_light_red over the generic
+            # traffic_light_3_phase class even when both share the generic
+            # "traffic signal" identity.
+            #
+            # This is deliberately applied after normalized attribute
+            # fusion so decisive visual state evidence cannot be diluted
+            # by unrelated ontology attributes.
+            discriminative_bonus = self._score_discriminative_bonus(
+                query,
+                candidate,
             )
 
-            if class_identity and candidate_class:
-
-                if class_identity == candidate_class:
-
-                    candidate.final_score += 0.20
-
-                elif (
-                    class_identity in candidate_class
-                    and class_identity != candidate_class
-                ):
-
-                    candidate.final_score -= 0.20
+            candidate.final_score += discriminative_bonus
 
             logger.debug(
-                "{} | embedding={:.3f} | attribute={:.3f} | final={:.3f}",
+                "{} | embedding={:.3f} | attribute={:.3f} "
+                "| identity={:.3f} | discriminative={:.3f} | final={:.3f}",
                 candidate.entry.class_name,
                 candidate.embedding_score,
                 candidate.attribute_score,
+                identity_score,
+                discriminative_bonus,
                 candidate.final_score,
             )
 
         candidates.sort(
-
             key=lambda c: c.final_score,
-
             reverse=True,
+        )
+        return candidates
 
+    def _class_identity_score(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> float:
+        """
+        Score generic semantic identity between the observed object
+        and the ontology class.
+
+        Exact matches receive a strong bonus.
+
+        Legitimate compound classes such as:
+            bus -> city_bus
+            traffic signal -> traffic_light_3_phase
+
+        are not penalized merely because the ontology class contains
+        additional specificity.
+
+        Cross-domain compounds are not rewarded.
+        """
+
+        observed = self._normalize(
+            query.observed_object
         )
 
-        return candidates
+        if not observed:
+            return 0.0
+
+        semantic = candidate.entry.data.get(
+            "semantic_information",
+            {},
+        )
+
+        class_name = self._normalize(
+            candidate.entry.class_name
+        )
+
+        aliases = [
+            self._normalize(value)
+            for value in semantic.get(
+                "aliases",
+                [],
+            )
+            if value
+        ]
+
+        synonyms = [
+            self._normalize(value)
+            for value in semantic.get(
+                "synonyms",
+                [],
+            )
+            if value
+        ]
+
+        identity_terms = {
+            class_name,
+            *aliases,
+            *synonyms,
+        }
+
+        # ----------------------------------------------------------
+        # Exact semantic identity
+        # ----------------------------------------------------------
+
+        if observed in identity_terms:
+
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "exact",
+                "observed": observed,
+            }
+
+            return 0.15
+
+        # ----------------------------------------------------------
+        # Token-level identity
+        # ----------------------------------------------------------
+
+        observed_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                observed,
+            )
+        )
+
+        best_similarity = 0.0
+        best_term = None
+
+        for term in identity_terms:
+
+            if not term:
+                continue
+
+            term_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    term,
+                )
+            )
+
+            if (
+                observed_tokens
+                and observed_tokens.issubset(term_tokens)
+            ):
+                similarity = 0.75
+            else:
+                similarity = self._similarity(
+                    observed,
+                    term,
+                )
+
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_term = term
+
+        # ----------------------------------------------------------
+        # Strong lexical identity
+        # ----------------------------------------------------------
+
+        if best_similarity >= 0.85:
+
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "similar",
+                "observed": observed,
+                "candidate": best_term,
+                "similarity": round(
+                    best_similarity,
+                    3,
+                ),
+            }
+
+            return 0.10
+
+        return 0.0
 
     def _is_category_compatible(
         self,
@@ -320,26 +481,42 @@ class CandidateRanker:
                 query,
                 candidate,
             ),
+
             self._score_visual(
                 query,
                 candidate,
             ),
+
             self._score_textual(
                 query,
                 candidate,
             ),
+
             self._score_contextual(
                 query,
                 candidate,
             ),
+
             self._score_semantic(
                 query,
                 candidate,
             ),
+
+            self._score_observed_evidence(
+                query,
+                candidate,
+            ),
+
+            self._score_class_specific_cues(
+                query,
+                candidate,
+            ),
+
             self._score_embedding_semantics(
                 query,
                 candidate,
             ),
+
             self._score_knowledge(
                 query,
                 candidate,
@@ -797,13 +974,16 @@ class CandidateRanker:
         candidate: CandidateMatch,
     ) -> tuple[float, float]:
         """
-        Score every textual cue.
+        Score textual and language-related evidence.
 
         Uses:
-        - OCR text
-        - Common text
-        - Common symbols
-        - Languages
+        - observed text
+        - observed symbols
+        - language information
+        - semantic text descriptions
+        - ontology keywords/synonyms/aliases
+
+        The scorer is generic and does not contain class-specific rules.
         """
 
         text_info = candidate.entry.data.get(
@@ -811,45 +991,90 @@ class CandidateRanker:
             {},
         )
 
+        semantic = candidate.entry.data.get(
+            "semantic_information",
+            {},
+        )
+
         obtained = 0.0
         maximum = 0.0
 
-        #########################################
-        # OCR Parsing
-        #########################################
-
-        tokens = self._tokenize_text(
-            query.text,
+        description = self._normalize(
+            query.description
         )
 
-        if hasattr(query, "symbol") and query.symbol:
+        observed_text = self._normalize(
+            query.text
+        )
+
+        observed_symbol = self._normalize(
+            query.symbol
+        )
+
+        # ----------------------------------------------------------
+        # Observed text tokens
+        # ----------------------------------------------------------
+
+        tokens = self._tokenize_text(
+            query.text
+        )
+
+        if observed_symbol:
             tokens.extend(
                 self._tokenize_text(
-                    query.symbol,
+                    query.symbol
                 )
             )
 
-        tokens = list(dict.fromkeys(tokens))
+        tokens = list(
+            dict.fromkeys(tokens)
+        )
 
-        #########################################
-        # Ontology
-        #########################################
+        # ----------------------------------------------------------
+        # Ontology text knowledge
+        # ----------------------------------------------------------
 
         common_text = self._normalize_list(
-            text_info.get("common_text", []),
+            text_info.get(
+                "common_text",
+                [],
+            )
         )
 
         common_symbols = self._normalize_list(
-            text_info.get("common_symbols", []),
+            text_info.get(
+                "common_symbols",
+                [],
+            )
         )
 
         languages = self._normalize_list(
-            text_info.get("languages", []),
+            text_info.get(
+                "languages",
+                [],
+            )
         )
 
-        #########################################
+        semantic_terms = self._normalize_list(
+            semantic.get(
+                "keywords",
+                []
+            )
+            +
+            semantic.get(
+                "synonyms",
+                []
+            )
+            +
+            semantic.get(
+                "aliases",
+                []
+            )
+        )
+
+        # ==========================================================
         # Text
-        #########################################
+        # ==========================================================
 
         text_weight = self._get_importance(
             candidate,
@@ -859,42 +1084,47 @@ class CandidateRanker:
 
         maximum += text_weight
 
+        best_text_similarity = 0.0
         matched_text = []
-        best_similarity = 0.0
 
         for token in tokens:
 
             matched, similarity = self._fuzzy_match(
                 token,
-                common_text,
+                common_text + semantic_terms,
             )
 
             if matched:
 
+                best_text_similarity = max(
+                    best_text_similarity,
+                    similarity,
+                )
+
                 matched_text.append(
                     {
                         "token": token,
-                        "similarity": round(similarity, 3),
+                        "similarity": round(
+                            similarity,
+                            3,
+                        ),
                     }
-                )
-
-                best_similarity = max(
-                    best_similarity,
-                    similarity,
                 )
 
         if matched_text:
 
             obtained += (
                 text_weight
-                * best_similarity
+                * best_text_similarity
             )
 
-            candidate.matched_attributes["text"] = matched_text
+            candidate.matched_attributes[
+                "text"
+            ] = matched_text
 
-        #########################################
-        # Symbols
-        #########################################
+        # ==========================================================
+        # Symbol
+        # ==========================================================
 
         symbol_weight = self._get_importance(
             candidate,
@@ -904,59 +1134,149 @@ class CandidateRanker:
 
         maximum += symbol_weight
 
-        matched_symbols = []
+        if observed_symbol:
 
-        for token in tokens:
-            matched, similarity = self._fuzzy_match(
-                token,
-                common_symbols,
-            )
+            matched_symbols = []
 
-            if matched:
-                matched_symbols.append(
-                    {
-                        "token": token,
-                        "similarity": round(similarity, 3),
-                    }
+            for symbol in common_symbols:
+
+                similarity = self._similarity(
+                    observed_symbol,
+                    symbol,
+                )
+
+                if similarity >= 0.70:
+
+                    matched_symbols.append(
+                        {
+                            "ontology": symbol,
+                            "similarity": round(
+                                similarity,
+                                3,
+                            ),
+                        }
+                    )
+
+            if matched_symbols:
+
+                best_similarity = max(
+                    item["similarity"]
+                    for item in matched_symbols
                 )
 
                 obtained += (
                     symbol_weight
-                    * similarity
-                    / max(len(tokens), 1)
+                    * best_similarity
                 )
 
-        if matched_symbols:
-            candidate.matched_attributes["symbols"] = matched_symbols
+                candidate.matched_attributes[
+                    "symbols"
+                ] = matched_symbols
 
-        #########################################
-        # Languages
-        #########################################
+        # ==========================================================
+        # Language / writing-system evidence
+        # ==========================================================
 
         language_weight = self._get_importance(
             candidate,
             "language",
-            0.05,
+            0.15,
         )
 
         maximum += language_weight
 
-        description = self._normalize(
-            query.description,
+        if languages:
+
+            matched_languages = []
+
+            for language in languages:
+
+                language_normalized = self._normalize(
+                    language
+                )
+
+                if (
+                    language_normalized
+                    and language_normalized in description
+                ):
+                    matched_languages.append(
+                        language_normalized
+                    )
+
+            if matched_languages:
+
+                coverage = (
+                    len(matched_languages)
+                    /
+                    len(languages)
+                )
+
+                obtained += (
+                    language_weight
+                    * coverage
+                )
+
+                candidate.matched_attributes[
+                    "languages"
+                ] = matched_languages
+
+        # ==========================================================
+        # Generic textual characteristics
+        # ==========================================================
+
+        textual_terms = (
+            common_text
+            + common_symbols
+            + languages
+            + semantic_terms
         )
 
-        matched_languages = []
+        textual_terms = list(
+            dict.fromkeys(textual_terms)
+        )
 
-        for language in languages:
-            if language in description:
-                matched_languages.append(language)
+        if textual_terms:
 
-        if matched_languages:
-            obtained += language_weight
-            candidate.matched_attributes["languages"] = matched_languages
+            characteristic_weight = self._get_importance(
+                candidate,
+                "textual_characteristics",
+                0.15,
+            )
+
+            maximum += characteristic_weight
+
+            matches = []
+
+            for term in textual_terms:
+
+                if (
+                    term
+                    and term in description
+                ):
+
+                    matches.append(term)
+
+            if matches:
+
+                coverage = (
+                    len(matches)
+                    /
+                    max(len(textual_terms), 1)
+                )
+
+                obtained += (
+                    characteristic_weight
+                    * min(
+                        coverage * 2.0,
+                        1.0,
+                    )
+                )
+
+                candidate.matched_attributes[
+                    "textual_characteristics"
+                ] = matches
 
         return obtained, maximum
-
     # ==========================================================
     # Context Evidence
     # ==========================================================
@@ -1263,6 +1583,333 @@ class CandidateRanker:
 
         return obtained, maximum
 
+    def _score_discriminative_bonus(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> float:
+        """Add a bounded direct bonus for explicit discriminative cues.
+
+        This supplements, rather than replaces, the existing evidence
+        fusion. The normalized attribute score can dilute a decisive
+        observation because class-specific cues are only one evidence
+        source among many.
+
+        Crucially, discriminative cues are derived from the candidate class
+        name, not from generic semantic metadata. A class such as
+        ``traffic_light_3_phase`` may mention red/green/yellow in its
+        metadata, but those colors do not make it a color-specific class.
+
+        A small direct bonus allows an explicitly observed state such as
+        "red lens visible" to influence the final ranking without
+        overwhelming the existing embedding and attribute evidence.
+
+        Returns
+        -------
+        float
+            Direct bounded bonus in the range [0.0, 0.15].
+        """
+
+        class_name = self._normalize(
+            candidate.entry.class_name,
+        )
+
+        observed_evidence = " ".join(
+            part
+            for part in [
+                self._normalize(query.observed_object),
+                self._normalize(query.description),
+                self._normalize(query.text),
+                self._normalize(query.symbol),
+                *[
+                    self._normalize(feature)
+                    for feature in query.distinguishing_features
+                ],
+            ]
+            if part
+        )
+
+        if not observed_evidence:
+            return 0.0
+
+        observed_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                observed_evidence,
+            )
+        )
+
+        class_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                class_name,
+            )
+        )
+
+        # Generic parent terms are not discriminative because they occur
+        # across many related ontology classes.
+        generic_tokens = {
+            "traffic",
+            "light",
+            "signal",
+            "sign",
+            "road",
+            "marking",
+            "vehicle",
+            "object",
+            "phase",
+            "class",
+        }
+
+        class_cues = {
+            token
+            for token in class_tokens
+            if token not in generic_tokens
+            and len(token) > 1
+        }
+
+        # IMPORTANT:
+        # Do not derive discriminative class-selection cues from ontology
+        # semantic metadata. Metadata often describes properties shared by
+        # the whole class family. For example, a 3-phase traffic light may
+        # legitimately list "red", "yellow", and "green" in its metadata,
+        # but those colors do NOT define the 3-phase class.
+        #
+        # The direct bonus therefore comes only from the ontology class name.
+        # Generic descriptive knowledge remains available to the normal
+        # attribute/evidence scorers above.
+        if not class_cues:
+            return 0.0
+
+        matched = sorted(
+            class_cues & observed_tokens,
+        )
+
+        if not matched:
+            return 0.0
+
+        # Keep the direct bonus limited to cues that commonly distinguish
+        # sibling ontology classes. Generic physical descriptors such as
+        # "head", "lens", "circular", and "mounted" must not become strong
+        # class-selection signals merely because an ontology entry mentions
+        # them.
+        discriminative_tokens = {
+            "red",
+            "green",
+            "yellow",
+            "amber",
+            "orange",
+            "blue",
+            "white",
+            "black",
+            "left",
+            "right",
+            "straight",
+            "turn",
+            "arrow",
+            "bicycle",
+            "pedestrian",
+            "bus",
+            "truck",
+            "car",
+            "van",
+            "motorcycle",
+            "stop",
+            "yield",
+            "priority",
+            "parking",
+            "prohibition",
+            "warning",
+            "mandatory",
+        }
+
+        strong_matches = [
+            token
+            for token in matched
+            if token in discriminative_tokens
+        ]
+
+        if not strong_matches:
+            return 0.0
+
+        # One explicit discriminative cue is sufficient for the full
+        # bounded bonus. Multiple matching cues do not stack without limit.
+        bonus = 0.15
+
+        candidate.matched_attributes[
+            "discriminative_bonus"
+        ] = {
+            "matched": strong_matches,
+            "bonus": bonus,
+        }
+
+        return bonus
+
+    def _score_class_specific_cues(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> tuple[float, float]:
+        """Score explicit discriminative cues stated in the observation.
+
+        The original ranker gives most of its weight to the embedding and
+        only weakly uses modifiers that distinguish closely related ontology
+        classes. This is a problem for classes such as ``traffic_light_red``,
+        ``traffic_light_green``, ``traffic_light_yellow`` and ``traffic_light_off``:
+        the scene description may explicitly state the decisive cue even when
+        the structured visual attribute is ``unknown``.
+
+        This scorer therefore compares discriminative tokens from the
+        ontology class name and semantic metadata against the complete
+        observed evidence, including the Scene Understanding description.
+
+        A cue is rewarded strongly only when it is explicitly present in the
+        observation. Generic parent tokens such as ``traffic``, ``light`` or
+        ``signal`` are ignored so that the scorer does not reward every
+        traffic-light candidate equally.
+
+        Returns
+        -------
+        tuple[float, float]
+            Obtained evidence and maximum possible evidence.
+        """
+
+        class_name = self._normalize(
+            candidate.entry.class_name,
+        )
+
+        semantic = candidate.entry.data.get(
+            "semantic_information",
+            {},
+        )
+
+        semantic_terms = [
+            self._normalize(term)
+            for term in (
+                semantic.get("keywords", [])
+                + semantic.get("synonyms", [])
+                + semantic.get("aliases", [])
+            )
+            if term
+        ]
+
+        # The complete description is important here. In the failing case,
+        # "red lens visible" exists in the description while query.primary_color
+        # is "unknown", so relying only on structured visual attributes loses
+        # the strongest available evidence.
+        observed_evidence = " ".join(
+            part
+            for part in [
+                self._normalize(query.observed_object),
+                self._normalize(query.description),
+                self._normalize(query.text),
+                self._normalize(query.symbol),
+                *[
+                    self._normalize(feature)
+                    for feature in query.distinguishing_features
+                ],
+            ]
+            if part
+        )
+
+        if not observed_evidence:
+            return 0.0, 0.0
+
+        observed_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                observed_evidence,
+            )
+        )
+
+        class_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                class_name,
+            )
+        )
+
+        # Generic ontology tokens carry little discriminative information.
+        # They are already handled by class identity / semantic evidence.
+        generic_tokens = {
+            "traffic",
+            "light",
+            "signal",
+            "sign",
+            "road",
+            "marking",
+            "vehicle",
+            "object",
+            "phase",
+            "class",
+        }
+
+        class_cues = {
+            token
+            for token in class_tokens
+            if token not in generic_tokens
+            and len(token) > 1
+        }
+
+        # Semantic metadata can contain the same decisive cue even when it is
+        # not literally present in the class name.
+        for term in semantic_terms:
+            term_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    term,
+                )
+            )
+
+            for token in term_tokens:
+                if (
+                    token not in generic_tokens
+                    and len(token) > 1
+                ):
+                    class_cues.add(token)
+
+        if not class_cues:
+            return 0.0, 0.0
+
+        # One strong cue should be enough to materially change the ranking.
+        # This is deliberately larger than the old visual-attribute signal,
+        # because an explicit textual state such as "red lens" is decisive.
+        weight = self._get_importance(
+            candidate,
+            "class_specific_cues",
+            1.0,
+        )
+
+        matched = sorted(
+            class_cues & observed_tokens,
+        )
+
+        # Avoid rewarding generic words accidentally introduced by semantic
+        # metadata. A cue must also be present as a meaningful token in the
+        # observation.
+        if not matched:
+            return 0.0, weight
+
+        coverage = min(
+            len(matched) / max(len(class_cues), 1),
+            1.0,
+        )
+
+        candidate.matched_attributes[
+            "class_specific_cues"
+        ] = {
+            "matched": matched,
+            "coverage": round(
+                coverage,
+                3,
+            ),
+        }
+
+        return (
+            weight * coverage,
+            weight,
+        )
+
     def _score_embedding_semantics(
         self,
         query,
@@ -1309,6 +1956,213 @@ class CandidateRanker:
             similarity * weight,
             weight,
         )
+
+    def _score_observed_evidence(
+        self,
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> tuple[float, float]:
+        """
+        Compare the complete observed scene evidence against the
+        ontology's descriptive knowledge.
+
+        This is intentionally generic.
+
+        It allows the ontology to contribute evidence from:
+            - description
+            - inference cues
+            - distinctive features
+            - semantic information
+            - text information
+
+        No ontology class names are hardcoded here.
+        """
+
+        data = candidate.entry.data
+
+        description = self._normalize(
+            query.description
+        )
+
+        observed_evidence = " ".join(
+            part
+            for part in [
+                description,
+                self._normalize(query.observed_object),
+                self._normalize(query.text),
+                self._normalize(query.symbol),
+                *[
+                    self._normalize(feature)
+                    for feature
+                    in query.distinguishing_features
+                ],
+            ]
+            if part
+        )
+
+        obtained = 0.0
+        maximum = 0.0
+
+        # ----------------------------------------------------------
+        # Ontology evidence sources
+        # ----------------------------------------------------------
+
+        evidence_sources = []
+
+        ontology_description = data.get(
+            "description",
+            "",
+        )
+
+        if ontology_description:
+            evidence_sources.append(
+                (
+                    "ontology_description",
+                    ontology_description,
+                    0.20,
+                )
+            )
+
+        inference = data.get(
+            "inference_cues",
+            {},
+        )
+
+        for cue in inference.get(
+            "likely_descriptions",
+            [],
+        ):
+
+            evidence_sources.append(
+                (
+                    "inference_cue",
+                    cue,
+                    0.25,
+                )
+            )
+
+        distinctive = data.get(
+            "distinctive_features",
+            [],
+        )
+
+        for feature in distinctive:
+
+            evidence_sources.append(
+                (
+                    "distinctive_feature",
+                    feature,
+                    0.30,
+                )
+            )
+
+        semantic = data.get(
+            "semantic_information",
+            {},
+        )
+
+        for term in (
+            semantic.get("keywords", [])
+            +
+            semantic.get("synonyms", [])
+            +
+            semantic.get("aliases", [])
+        ):
+
+            evidence_sources.append(
+                (
+                    "semantic_term",
+                    term,
+                    0.15,
+                )
+            )
+
+        if not evidence_sources:
+            return 0.0, 0.0
+
+        # ----------------------------------------------------------
+        # Evidence matching
+        # ----------------------------------------------------------
+
+        for source_type, evidence, weight in evidence_sources:
+
+            evidence = self._normalize(
+                evidence
+            )
+
+            if not evidence:
+                continue
+
+            maximum += weight
+
+            # Exact phrase occurrence is strong evidence.
+            if evidence in observed_evidence:
+
+                obtained += weight
+
+                candidate.matched_attributes.setdefault(
+                    "observed_evidence",
+                    [],
+                ).append(
+                    {
+                        "type": source_type,
+                        "evidence": evidence,
+                        "similarity": 1.0,
+                    }
+                )
+
+                continue
+
+            # Otherwise use token overlap rather than comparing
+            # two complete sentences with SequenceMatcher.
+            evidence_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    evidence,
+                )
+            )
+
+            observed_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    observed_evidence,
+                )
+            )
+
+            if not evidence_tokens:
+                continue
+
+            overlap = (
+                len(
+                    evidence_tokens
+                    & observed_tokens
+                )
+                /
+                len(evidence_tokens)
+            )
+
+            if overlap >= 0.60:
+
+                obtained += (
+                    weight
+                    * min(overlap, 1.0)
+                )
+
+                candidate.matched_attributes.setdefault(
+                    "observed_evidence",
+                    [],
+                ).append(
+                    {
+                        "type": source_type,
+                        "evidence": evidence,
+                        "similarity": round(
+                            overlap,
+                            3,
+                        ),
+                    }
+                )
+
+        return obtained, maximum
 
     # ==========================================================
     # Knowledge Evidence
@@ -1441,7 +2295,10 @@ class CandidateRanker:
         ##############################################
 
         features = self._normalize_list(
-            candidate.entry.data.get("distinctive_features", []),
+            candidate.entry.data.get(
+                "distinctive_features",
+                [],
+            ),
         )
 
         weight = self._get_importance(
@@ -1452,45 +2309,77 @@ class CandidateRanker:
 
         maximum += weight
 
-        description = self._normalize(
-            query.description,
+        observed_text = self._normalize(
+            " ".join(
+                [
+                    query.description,
+                    *query.distinguishing_features,
+                    query.text or "",
+                    query.symbol or "",
+                ]
+            )
         )
 
         matched = []
 
         for feature in features:
-            similarity = self._similarity(
-                description,
-                feature,
+
+            feature_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    feature,
+                )
             )
 
-            if similarity > 0.75:
+            observed_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    observed_text,
+                )
+            )
+
+            if not feature_tokens:
+                continue
+
+            overlap = (
+                len(
+                    feature_tokens
+                    &
+                    observed_tokens
+                )
+                /
+                len(feature_tokens)
+            )
+
+            if overlap >= 0.50:
+
                 matched.append(
                     {
                         "feature": feature,
-                        "similarity": round(similarity, 3),
+                        "similarity": round(
+                            overlap,
+                            3,
+                        ),
                     }
                 )
 
         if matched:
-            average_similarity = (
-                sum(
-                    item["similarity"]
-                    for item in matched
-                )
-                /
-                len(matched)
+
+            best_similarity = max(
+                item["similarity"]
+                for item in matched
             )
 
-            coverage = (
-                len(matched)
-                /
-                max(len(features),1)
+            # Reward strong feature matches without requiring
+            # every ontology feature to be visible.
+            obtained += (
+                weight
+                * best_similarity
             )
 
-            score = average_similarity * coverage
-            obtained += weight * score
-            candidate.matched_attributes["distinctive_features"] = matched
+            candidate.matched_attributes[
+                "distinctive_features"
+            ] = matched
 
         return obtained, maximum
     # ==========================================================

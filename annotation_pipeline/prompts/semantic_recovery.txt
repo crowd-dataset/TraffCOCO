@@ -1,0 +1,73 @@
+You are re-examining ONE traffic sign that was previously classified as
+unreadable.
+
+Two images are provided:
+1. the ORIGINAL image for context
+2. a CROPPED region containing the target traffic sign
+
+The CROPPED REGION is the PRIMARY evidence.
+Use the original image only as supporting context.
+
+Identify the sign only when its semantic identity is highly certain from
+the visible sign itself.
+
+Inspect:
+- visible text
+- pictograms
+- arrows
+- numbers
+- symbols
+- shape
+- colours
+- border
+- background
+- supplementary plates
+- clearly visible writing systems
+
+Do NOT guess from:
+- road context
+- sign location
+- nearby objects
+- common traffic conventions
+- likely purpose
+- ontology expectations
+
+Do NOT invent text, symbols, arrows, languages, countries, or meaning.
+
+If the sign remains insufficiently clear to identify, use:
+"unreadable traffic sign"
+
+Return EXACTLY ONE JSON object using this schema:
+
+{
+    "observed_object": "...",
+    "object_group": "traffic_sign",
+    "description": "...",
+    "visual_attributes": {
+        "primary_color": "...",
+        "secondary_color": "...",
+        "shape": "...",
+        "border": {
+            "shape": "...",
+            "color": "..."
+        },
+        "background_color": "...",
+        "material": "...",
+        "reflective": true | false | "unknown",
+        "text": "...",
+        "symbol": "...",
+        "distinguishing_features": [
+            "...",
+            "..."
+        ]
+    }
+}
+
+Use "unreadable" only when visible text or a visible pictogram exists
+but cannot be deciphered.
+
+Use "none" when text or a symbol is visibly absent.
+
+Use "unknown" when an attribute cannot be visually determined.
+
+Return ONLY valid JSON.

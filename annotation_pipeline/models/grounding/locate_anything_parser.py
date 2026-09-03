@@ -1,21 +1,4 @@
-"""
-locate_anything_parser.py
-
-Parser for NVIDIA Locate Anything outputs.
-
-Pipeline
-
-Raw Model Output
-        │
-        ▼
-Native Locate Anything Parsing
-        │
-        ▼
-Structured Bounding Boxes
-        │
-        ▼
-Scene Object Matching
-"""
+"""Locate Anything output parser with conservative scene-object matching."""
 
 from __future__ import annotations
 
@@ -28,29 +11,10 @@ logger = CustomLogger(__name__)
 
 
 class LocateAnythingParser:
-    """
-    Parse native Locate Anything text outputs into structured detections.
-
-    Locate Anything can return multiple bounding boxes for a single
-    semantic reference, for example:
-
-        <ref>passenger car</ref>
-        <box><x1><y1><x2><y2></box>
-        <box><x1><y1><x2><y2></box>
-
-    The parser therefore treats every <box> following a <ref> as a
-    separate detection while preserving the reference name.
-    """
+    """Parse Locate Anything boxes and attach them to scene objects."""
 
     def __init__(self) -> None:
-
-        logger.info(
-            "Initialized LocateAnythingParser."
-        )
-
-        # ------------------------------------------------------
-        # Native Locate Anything tokens
-        # ------------------------------------------------------
+        logger.info("Initialized LocateAnythingParser.")
 
         self.ref_pattern = re.compile(
             r"<ref>\s*(.*?)\s*</ref>",
@@ -58,27 +22,21 @@ class LocateAnythingParser:
         )
 
         self.box_pattern = re.compile(
-            r"""
-            <box>
-            \s*
-            (?:
-                <\s*([0-9]+)\s*>
-                <\s*([0-9]+)\s*>
-                <\s*([0-9]+)\s*>
-                <\s*([0-9]+)\s*>
-                |
-                ([0-9]+)\s*,\s*
-                ([0-9]+)\s*,\s*
-                ([0-9]+)\s*,\s*
-                ([0-9]+)
-            )
-            \s*</box>
-            """,
-            flags=re.IGNORECASE | re.VERBOSE,
+            r"<box>\s*"
+            r"(?:"
+            r"<\s*([0-9]+(?:\.[0-9]+)?)\s*>\s*"
+            r"<\s*([0-9]+(?:\.[0-9]+)?)\s*>\s*"
+            r"<\s*([0-9]+(?:\.[0-9]+)?)\s*>\s*"
+            r"<\s*([0-9]+(?:\.[0-9]+)?)\s*>"
+            r"|"
+            r"([0-9]+(?:\.[0-9]+)?)\s*,\s*"
+            r"([0-9]+(?:\.[0-9]+)?)\s*,\s*"
+            r"([0-9]+(?:\.[0-9]+)?)\s*,\s*"
+            r"([0-9]+(?:\.[0-9]+)?)"
+            r")\s*</box>",
+            flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # A point is also represented by <box>, but has only two
-        # coordinates. We do not treat points as bounding boxes.
         self.point_pattern = re.compile(
             r"<box>\s*"
             r"<([0-9]+(?:\.[0-9]+)?)>\s*"
@@ -87,781 +45,299 @@ class LocateAnythingParser:
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        
-
-    # ==========================================================
-    # Public API
-    # ==========================================================
-
     def parse(
         self,
         raw_output: str,
         scene_objects: list[dict[str, Any]] | None = None,
         image_size: tuple[int, int] | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Parse native Locate Anything output.
-
-        Locate Anything returns bounding-box coordinates in a
-        0-1000 coordinate space. These coordinates are converted
-        to pixel coordinates using the ORIGINAL image dimensions
-        supplied through ``image_size``.
-
-        Parameters
-        ----------
-        raw_output:
-            Raw Locate Anything model output.
-
-        scene_objects:
-            Optional Scene Understanding objects used for matching.
-
-        image_size:
-            Original image size as ``(width, height)``.
-
-            Example:
-                PIL image size -> (1280, 720)
-
-            Locate Anything:
-                <box><832><494><986><652></box>
-
-            Converted:
-                [1065, 356, 1262, 469]
-        """
-
-        logger.info(
-            "Parsing Locate Anything output."
-        )
+        """Parse native Locate Anything refs/boxes and optionally match IDs."""
 
         if not raw_output:
-            logger.warning(
-                "Locate Anything returned empty output."
-            )
+            logger.warning("Locate Anything returned empty output.")
             return []
 
-        # ----------------------------------------------------------
-        # Validate image size
-        # ----------------------------------------------------------
+        image_width: int | None = None
+        image_height: int | None = None
 
         if image_size is not None:
-
             image_width, image_height = image_size
-
             if image_width <= 0 or image_height <= 0:
+                raise ValueError(f"Invalid image_size: {image_size}")
 
-                raise ValueError(
-                    f"Invalid image_size: {image_size}"
-                )
-
-            logger.debug(
-                "Using original image dimensions for bbox scaling: "
-                "{}x{}",
-                image_width,
-                image_height,
-            )
-
-        else:
-
-            image_width = None
-            image_height = None
-
-            logger.warning(
-                "No image_size supplied to LocateAnythingParser. "
-                "Bounding boxes will remain in Locate Anything's "
-                "0-1000 coordinate space."
-            )
-
-        parsed_detections: list[dict[str, Any]] = []
-
+        parsed: list[dict[str, Any]] = []
         current_ref: str | None = None
 
-        # ----------------------------------------------------------
-        # Process <ref> and <box> tokens in model output order
-        # ----------------------------------------------------------
-
         token_pattern = re.compile(
-            r"<ref>\s*(.*?)\s*</ref>"
-            r"|<box>\s*(.*?)\s*</box>",
+            r"<ref>\s*(.*?)\s*</ref>|<box>\s*(.*?)\s*</box>",
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        for token_match in token_pattern.finditer(
-            raw_output,
-        ):
-
+        for token_match in token_pattern.finditer(raw_output):
             ref_text = token_match.group(1)
             box_text = token_match.group(2)
 
-            # ------------------------------------------------------
-            # New reference
-            # ------------------------------------------------------
-
             if ref_text is not None:
-
-                current_ref = self._clean_object_name(
-                    ref_text,
-                )
-
+                current_ref = self._clean_object_name(ref_text)
                 continue
 
-            # ------------------------------------------------------
-            # Box
-            # ------------------------------------------------------
-
-            if box_text is None:
+            if box_text is None or current_ref is None:
                 continue
-
-            if current_ref is None:
-
-                logger.warning(
-                    "Found Locate Anything box before a reference. "
-                    "Skipping it."
-                )
-
-                continue
-
-            # ------------------------------------------------------
-            # Extract coordinates
-            #
-            # Native:
-            # <box><608><489><696><610></box>
-            #
-            # Also:
-            # <box>608,489,696,610</box>
-            # ------------------------------------------------------
 
             numbers = re.findall(
                 r"<\s*([0-9]+(?:\.[0-9]+)?)\s*>",
                 box_text,
             )
-
             if len(numbers) == 0:
-
                 numbers = re.findall(
                     r"[0-9]+(?:\.[0-9]+)?",
                     box_text,
                 )
 
-            # ------------------------------------------------------
-            # Ignore point outputs
-            # ------------------------------------------------------
-
             if len(numbers) == 2:
-
-                logger.debug(
-                    "Ignoring point output for '{}'.",
-                    current_ref,
-                )
-
+                logger.debug("Ignoring point output for '{}'.", current_ref)
                 continue
 
-            # ------------------------------------------------------
-            # Reject malformed boxes
-            # ------------------------------------------------------
-
             if len(numbers) != 4:
-
                 logger.warning(
-                    "Ignoring malformed box for '{}': "
-                    "{} coordinate(s).",
+                    "Ignoring malformed box for '{}': {} coordinate(s).",
                     current_ref,
                     len(numbers),
                 )
-
                 continue
 
-            # ------------------------------------------------------
-            # Convert model coordinates to numbers
-            # ------------------------------------------------------
-
-            raw_bbox = [
-                self._to_number(numbers[0]),
-                self._to_number(numbers[1]),
-                self._to_number(numbers[2]),
-                self._to_number(numbers[3]),
-            ]
-
+            raw_bbox = [self._to_number(value) for value in numbers]
             x1, y1, x2, y2 = raw_bbox
+            x1, x2 = sorted((x1, x2))
+            y1, y2 = sorted((y1, y2))
 
-            # ------------------------------------------------------
-            # Normalize coordinate ordering FIRST
-            # ------------------------------------------------------
-
-            x1, x2 = sorted(
-                (x1, x2),
-            )
-
-            y1, y2 = sorted(
-                (y1, y2),
-            )
-
-            # ------------------------------------------------------
-            # Validate native Locate Anything coordinates
-            #
-            # Locate Anything uses a 0-1000 coordinate system.
-            # ------------------------------------------------------
-
-            if (
-                x1 < 0
-                or y1 < 0
-                or x2 > 1000
-                or y2 > 1000
-            ):
-
-                logger.warning(
-                    "Locate Anything bbox outside expected "
-                    "0-1000 coordinate range for '{}': {}",
-                    current_ref,
-                    raw_bbox,
-                )
-
-                # Clamp rather than allowing invalid coordinates
-                # into the visualization pipeline.
-
-                x1 = max(0, min(1000, x1))
-                y1 = max(0, min(1000, y1))
-                x2 = max(0, min(1000, x2))
-                y2 = max(0, min(1000, y2))
-
-            # ------------------------------------------------------
-            # Reject degenerate boxes AFTER normalization
-            # ------------------------------------------------------
+            x1 = max(0, min(1000, x1))
+            y1 = max(0, min(1000, y1))
+            x2 = max(0, min(1000, x2))
+            y2 = max(0, min(1000, y2))
 
             if x2 <= x1 or y2 <= y1:
-
                 logger.warning(
-                    "Ignoring degenerate Locate Anything bounding box "
-                    "for '{}': {}",
+                    "Ignoring degenerate Locate Anything bounding box for '{}': {}",
                     current_ref,
                     raw_bbox,
                 )
-
                 continue
 
-            # ------------------------------------------------------
-            # Convert 0-1000 coordinates to ORIGINAL IMAGE pixels
-            # ------------------------------------------------------
-
-            if (
-                image_width is not None
-                and image_height is not None
-            ):
-
-                x1 = x1 / 1000.0 * image_width
-                y1 = y1 / 1000.0 * image_height
-                x2 = x2 / 1000.0 * image_width
-                y2 = y2 / 1000.0 * image_height
-
-                # Keep coordinates inside the original image.
-
-                x1 = max(
-                    0,
-                    min(image_width, x1),
-                )
-
-                y1 = max(
-                    0,
-                    min(image_height, y1),
-                )
-
-                x2 = max(
-                    0,
-                    min(image_width, x2),
-                )
-
-                y2 = max(
-                    0,
-                    min(image_height, y2),
-                )
-
-                # Use integers for downstream drawing/COCO operations.
-
+            if image_width is not None and image_height is not None:
                 bbox = [
-                    round(x1),
-                    round(y1),
-                    round(x2),
-                    round(y2),
+                    round(x1 / 1000.0 * image_width),
+                    round(y1 / 1000.0 * image_height),
+                    round(x2 / 1000.0 * image_width),
+                    round(y2 / 1000.0 * image_height),
                 ]
-
             else:
+                bbox = [x1, y1, x2, y2]
 
-                # No original image dimensions were supplied.
-                # Preserve the native 0-1000 coordinates.
-
-                bbox = [
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                ]
-
-            # ------------------------------------------------------
-            # Create detection
-            # ------------------------------------------------------
-
-            detection = {
-                "object_id": None,
-                "object_name": current_ref,
-                "bbox": bbox,
-            }
-
-            parsed_detections.append(
-                detection,
+            parsed.append(
+                {
+                    "object_id": None,
+                    "object_name": current_ref,
+                    "bbox": bbox,
+                }
             )
 
-            logger.debug(
-                "Parsed Locate Anything detection: {}",
-                detection,
-            )
+        parsed = self._deduplicate(parsed)
 
         logger.info(
-            "Found {} Locate Anything bounding-box detection(s).",
-            len(parsed_detections),
+            "Found {} unique Locate Anything bounding-box detection(s).",
+            len(parsed),
         )
 
-        # ----------------------------------------------------------
-        # Nothing parsed
-        # ----------------------------------------------------------
+        if not parsed or scene_objects is None:
+            return parsed
 
-        if not parsed_detections:
+        self._match_scene_objects(parsed, scene_objects)
 
+        matched = sum(
+            detection.get("object_id") is not None
+            for detection in parsed
+        )
+        logger.info(
+            "Created {} parsed detection(s); {} matched to scene objects.",
+            len(parsed),
+            matched,
+        )
+
+        unmatched = len(parsed) - matched
+        if unmatched:
             logger.warning(
-                "No Locate Anything bounding boxes could "
-                "be parsed from the model output."
+                "{} Locate Anything detection(s) could not be matched to scene objects.",
+                unmatched,
             )
 
-            return []
-
-        # ----------------------------------------------------------
-        # No scene objects
-        # ----------------------------------------------------------
-
-        if scene_objects is None:
-
-            logger.warning(
-                "No scene objects supplied. "
-                "Returning detections without scene IDs."
-            )
-
-            return parsed_detections
-
-        # ----------------------------------------------------------
-        # Match detections to Scene Understanding objects
-        # ----------------------------------------------------------
-
-        logger.info(
-            "========== LOCATE ANYTHING PARSER DEBUG =========="
-        )
-
-        logger.info(
-            "Parsed detections: {}",
-            parsed_detections,
-        )
-
-        logger.info(
-            "Scene objects: {}",
-            scene_objects,
-        )
-
-        logger.info(
-            "=================================================="
-        )
-
-        self._match_scene_objects(
-            detections=parsed_detections,
-            scene_objects=scene_objects,
-        )
-
-        # ----------------------------------------------------------
-        # Diagnostics
-        # ----------------------------------------------------------
-
-        matched_count = sum(
-            1
-            for detection in parsed_detections
-            if detection.get("object_id") is not None
-        )
-
-        unmatched_detection_count = (
-            len(parsed_detections)
-            - matched_count
-        )
-
-        matched_scene_ids = {
-            detection.get("object_id")
-            for detection in parsed_detections
-            if detection.get("object_id") is not None
-        }
-
-        unmatched_scene_count = sum(
-            1
-            for scene_object in scene_objects
-            if scene_object.get("object_id")
-            not in matched_scene_ids
-        )
-
-        logger.info(
-            "Created {} parsed detection(s); "
-            "{} matched to scene objects.",
-            len(parsed_detections),
-            matched_count,
-        )
-
-        if unmatched_detection_count > 0:
-
-            logger.warning(
-                "{} Locate Anything detection(s) "
-                "could not be matched to scene objects.",
-                unmatched_detection_count,
-            )
-
-        if unmatched_scene_count > 0:
-
-            logger.warning(
-                "{} scene object(s) did not receive "
-                "a Locate Anything detection.",
-                unmatched_scene_count,
-            )
-
-        return parsed_detections
-
-    # ==========================================================
-    # Scene Matching
-    # ==========================================================
+        return parsed
 
     def _match_scene_objects(
         self,
         detections: list[dict[str, Any]],
         scene_objects: list[dict[str, Any]],
     ) -> None:
-        """
-        Match Locate Anything detections to Scene Understanding objects.
+        """Match LA refs using canonical names and conservative aliases.
 
-        Matching strategy:
-        1. Exact normalized object name.
-        2. Known semantic aliases.
-        3. Each scene object can only be assigned once.
-
-        Extra Locate Anything boxes that do not correspond to another
-        scene object remain unmatched and keep object_id=None.
+        Multiple LA boxes may map to the same scene object. A scene object is
+        therefore not consumed after the first successful match.
         """
 
-        scene_by_name: dict[
-            str,
-            list[dict[str, Any]],
-        ] = {}
-
-        # ----------------------------------------------------------
-        # Build normalized scene-object lookup
-        # ----------------------------------------------------------
+        scene_by_name: dict[str, list[dict[str, Any]]] = {}
 
         for scene_object in scene_objects:
-
-            object_name = scene_object.get(
+            seen_keys: set[str] = set()
+            for field in (
+                "grounding_prompt",
                 "observed_object",
-                scene_object.get(
-                    "object_name",
-                    "",
-                ),
-            )
-
-            if not object_name:
-                continue
-
-            normalized_name = self._normalize_name(
-                str(object_name),
-            )
-
-            scene_by_name.setdefault(
-                normalized_name,
-                [],
-            ).append(
-                scene_object,
-            )
-
-        # ----------------------------------------------------------
-        # Track already-used scene objects
-        # ----------------------------------------------------------
-
-        used_scene_ids: set[Any] = set()
-
-        # ----------------------------------------------------------
-        # Match detections
-        # ----------------------------------------------------------
-
-        for detection in detections:
-
-            detected_name = str(
-                detection.get(
-                    "object_name",
-                    "",
-                )
-            )
-
-            normalized_name = self._normalize_name(
-                detected_name,
-            )
-
-            # ------------------------------------------------------
-            # First try exact match
-            # ------------------------------------------------------
-
-            candidates = scene_by_name.get(
-                normalized_name,
-                [],
-            )
-
-            matched_scene_object = None
-
-            for candidate in candidates:
-
-                candidate_id = candidate.get(
-                    "object_id",
-                )
-
-                if candidate_id in used_scene_ids:
+                "class_name",
+                "object_name",
+            ):
+                value = scene_object.get(field)
+                if not isinstance(value, str) or not value.strip():
                     continue
 
-                matched_scene_object = candidate
-                break
+                normalized = self._normalize_name(value)
+                if not normalized or normalized in seen_keys:
+                    continue
 
-            # ------------------------------------------------------
-            # Try semantic aliases if exact match failed
-            # ------------------------------------------------------
+                seen_keys.add(normalized)
+                scene_by_name.setdefault(normalized, []).append(scene_object)
 
+        for detection in detections:
+            detected_name = str(detection.get("object_name", ""))
+            normalized_name = self._normalize_name(detected_name)
+            matched_scene_object: dict[str, Any] | None = None
+            match_type: str | None = None
+
+            candidates = scene_by_name.get(normalized_name, [])
+
+            # Exact match priority: grounding_prompt -> observed_object ->
+            # class_name -> object_name.
+            for field, label in (
+                ("grounding_prompt", "grounding_prompt"),
+                ("observed_object", "observed_object"),
+                ("class_name", "class_name"),
+                ("object_name", "object_name"),
+            ):
+                exact = [
+                    candidate
+                    for candidate in candidates
+                    if self._normalize_name(
+                        str(candidate.get(field) or "")
+                    ) == normalized_name
+                ]
+                matched_scene_object = self._choose_unique(exact)
+                if matched_scene_object is not None:
+                    match_type = label
+                    break
+
+            # Conservative aliases only. No generic one-token overlap.
             if matched_scene_object is None:
-
-                aliases = self._get_name_aliases(
-                    normalized_name,
-                )
-
-                for alias in aliases:
-
-                    candidates = scene_by_name.get(
-                        alias,
-                        [],
-                    )
-
-                    for candidate in candidates:
-
-                        candidate_id = candidate.get(
-                            "object_id",
-                        )
-
-                        if candidate_id in used_scene_ids:
-                            continue
-
-                        matched_scene_object = candidate
-                        break
-
+                for alias in self._get_name_aliases(normalized_name):
+                    alias_candidates = scene_by_name.get(alias, [])
+                    matched_scene_object = self._choose_unique(alias_candidates)
                     if matched_scene_object is not None:
+                        match_type = "alias"
                         break
 
-            # ------------------------------------------------------
-            # No matching scene object
-            # ------------------------------------------------------
-
             if matched_scene_object is None:
-
                 logger.warning(
-                    "No scene-object match for Locate Anything "
-                    "detection '{}'.",
+                    "No scene-object match for Locate Anything detection '{}'.",
                     detected_name,
                 )
-
                 continue
 
-            # ------------------------------------------------------
-            # Extract scene-object identity
-            # ------------------------------------------------------
-
-            object_id = matched_scene_object.get(
-                "object_id",
-            )
-
-            object_name = matched_scene_object.get(
-                "observed_object",
-                matched_scene_object.get(
-                    "object_name",
-                    detected_name,
-                ),
-            )
-
-            # ------------------------------------------------------
-            # Do NOT assign None as a valid object ID
-            # ------------------------------------------------------
-
+            object_id = matched_scene_object.get("object_id")
             if object_id is None:
-
                 logger.warning(
-                    "Matched Locate Anything '{}' to a scene object "
-                    "without object_id.",
+                    "Matched Locate Anything '{}' to a scene object without object_id.",
                     detected_name,
                 )
-
                 continue
 
             detection["object_id"] = object_id
-
-            detection["object_name"] = object_name
-
-            used_scene_ids.add(
-                object_id,
+            detection["object_name"] = matched_scene_object.get(
+                "observed_object",
+                matched_scene_object.get("object_name", detected_name),
+            )
+            detection.setdefault("_match_metadata", {})
+            detection["_match_metadata"].update(
+                {
+                    "match_type": match_type or "direct",
+                    "matched_object_id": object_id,
+                    "candidate_ids": [
+                        candidate.get("object_id")
+                        for candidate in candidates
+                    ],
+                }
             )
 
             logger.debug(
-                "Matched Locate Anything '{}' "
-                "to scene object ID {}.",
+                "Matched Locate Anything '{}' to scene object ID {} (match_type={}).",
                 detected_name,
                 object_id,
+                match_type or "direct",
             )
 
     @staticmethod
-    def _get_name_aliases(
-        name: str,
-    ) -> list[str]:
-        """
-        Return known semantic aliases for Locate Anything labels.
+    def _choose_unique(
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Return one candidate only when its canonical ID is unambiguous."""
+        if not candidates:
+            return None
 
-        These aliases are intentionally conservative. They are only used
-        after an exact normalized-name match fails.
-        """
+        ids = [candidate.get("object_id") for candidate in candidates]
+        unique_ids = {value for value in ids if value is not None}
 
+        if len(unique_ids) == 1:
+            object_id = next(iter(unique_ids))
+            for candidate in candidates:
+                if candidate.get("object_id") == object_id:
+                    return candidate
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        return None
+
+    @staticmethod
+    def _get_name_aliases(name: str) -> list[str]:
+        """Return conservative semantic aliases."""
         alias_groups = {
-            "car": {
-                "passenger car",
-                "car",
-                "vehicle",
-            },
-            "passenger car": {
-                "passenger car",
-                "car",
-                "vehicle",
-            },
-            "vehicle": {
-                "passenger car",
-                "car",
-                "van",
-                "truck",
-                "bus",
-                "vehicle",
-            },
-            "road marking": {
-                "road marking",
-                "road markings",
-                "lane divider",
-                "lane divider broken",
-                "dashed lane divider",
-                "lane boundary",
-                "marking",
-            },
-            "road markings": {
-                "road marking",
-                "road markings",
-                "lane divider",
-                "lane divider broken",
-                "dashed lane divider",
-                "lane boundary",
-                "marking",
-            },
-            "street light": {
-                "street light",
-                "streetlight",
-                "lamp post",
-                "light pole",
-                "street lamp",
-            },
-            "streetlight": {
-                "street light",
-                "streetlight",
-                "lamp post",
-                "light pole",
-                "street lamp",
-            },
-            "truck": {
-                "truck",
-                "lorry",
-                "vehicle",
-            },
-            "lorry": {
-                "truck",
-                "lorry",
-                "vehicle",
-            },
-            "traffic sign": {
-                "traffic sign",
-                "road sign",
-                "guide sign",
-                "warning sign",
-                "regulatory traffic sign",
-                "bilingual road sign",
-            },
-            "road sign": {
-                "traffic sign",
-                "road sign",
-                "guide sign",
-                "warning sign",
-                "regulatory traffic sign",
-                "bilingual road sign",
-            },
-            "bilingual road sign": {
-                "traffic sign",
-                "road sign",
-                "guide sign",
-                "bilingual road sign",
-            },
-            "traffic signal": {
-                "traffic signal",
-                "traffic light",
-                "signal head",
-            },
-            "traffic light": {
-                "traffic signal",
-                "traffic light",
-                "signal head",
-            },
-            "bus": {
-                "bus",
-                "city bus",
-                "vehicle",
-            },
-            "van": {
-                "van",
-                "vehicle",
-            },
-            "building": {
-                "building",
-            },
-            "marking": {
-                "marking",
-                "road marking",
-                "lane divider",
-                "dashed lane divider",
-            },
+            "car": {"passenger car", "car"},
+            "passenger car": {"passenger car", "car"},
+            "truck": {"truck", "lorry"},
+            "lorry": {"truck", "lorry"},
+            "bus": {"bus", "city bus"},
+            "city bus": {"bus", "city bus"},
+            "van": {"van"},
+            "traffic signal": {"traffic signal", "traffic light", "signal head"},
+            "traffic light": {"traffic signal", "traffic light", "signal head"},
+            "signal head": {"traffic signal", "traffic light", "signal head"},
+            "traffic sign": {"traffic sign", "road sign", "guide sign", "warning sign"},
+            "road sign": {"traffic sign", "road sign", "guide sign"},
+            "zebra": {"zebra", "zebra crossing", "crosswalk", "pedestrian crossing"},
+            "zebra crossing": {"zebra", "zebra crossing", "crosswalk", "pedestrian crossing"},
+            "crosswalk": {"zebra", "zebra crossing", "crosswalk", "pedestrian crossing"},
+            "pedestrian crossing": {"zebra", "zebra crossing", "crosswalk", "pedestrian crossing"},
+            "guardrail": {"guardrail", "guard rail", "guardail"},
+            "guard rail": {"guardrail", "guard rail", "guardail"},
+            "guardail": {"guardrail", "guard rail", "guardail"},
+            "street light": {"street light", "streetlight", "street lamp", "lamp post", "light pole"},
+            "streetlight": {"street light", "streetlight", "street lamp", "lamp post", "light pole"},
+            "road marking": {"road marking", "road markings", "marking"},
+            "road markings": {"road marking", "road markings", "marking"},
+            "marking": {"road marking", "road markings", "marking"},
         }
-
-        return sorted(
-            alias_groups.get(
-                name,
-                set(),
-            )
-            - {name},
-        )
-    # ==========================================================
-    # Utilities
-    # ==========================================================
+        return sorted(alias_groups.get(name, set()) - {name})
 
     @staticmethod
-    def _clean_object_name(
-        name: str,
-    ) -> str:
-        """
-        Clean a raw Locate Anything reference name.
-        """
-
+    def _clean_object_name(name: str) -> str:
+        """Clean accidental wrappers from a raw LA reference."""
         name = name.strip()
-
-        # Remove accidental model-generated wrappers such as:
-        # "<948> marking" or "object name: passenger car"
         name = re.sub(
             r"^(?:object\s+name|object|name)\s*:\s*",
             "",
@@ -872,60 +348,48 @@ class LocateAnythingParser:
             r"^<\s*[-+]?\d+(?:\.\d+)?\s*>\s*",
             "",
             name,
-            flags=re.IGNORECASE,
         )
-        name = re.sub(
-            r"^(?:[-+]?\d+(?:\.\d+)?\s*[,;:.-]\s*)+",
-            "",
-            name,
-            flags=re.IGNORECASE,
-        )
-
-        return " ".join(
-            name.split()
-        )
+        return " ".join(name.split())
 
     @staticmethod
-    def _normalize_name(
-        name: str,
-    ) -> str:
-        """
-        Normalize an object name for scene-object matching.
-        """
-
-        name = name.strip().lower()
-
+    def _normalize_name(name: str) -> str:
+        """Normalize names and canonicalize recurring LA spelling errors."""
+        name = str(name).strip().lower()
         name = re.sub(
             r"^(?:object\s+name|object|name)\s*:\s*",
             "",
             name,
             flags=re.IGNORECASE,
         )
+        name = re.sub(r"[_-]+", " ", name)
+        name = " ".join(name.split())
 
-        # Treat underscores/hyphens as spaces so:
-        # road_marking == road marking
-        # street-light == street light
-        name = re.sub(
-            r"[_\-]+",
-            " ",
-            name,
-        )
+        if name == "guardail":
+            return "guardrail"
 
-        return " ".join(
-            name.split()
-        )
+        return name
 
     @staticmethod
-    def _to_number(
-        value: str,
-    ) -> int | float:
-        """
-        Convert a numeric string to int when possible.
-        """
-
+    def _to_number(value: str) -> int | float:
         number = float(value)
+        return int(number) if number.is_integer() else number
 
-        if number.is_integer():
-            return int(number)
+    @staticmethod
+    def _deduplicate(
+        detections: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Remove only exact duplicate ref+bbox detections."""
+        seen: set[tuple[str, tuple[Any, ...]]] = set()
+        unique: list[dict[str, Any]] = []
 
-        return number
+        for detection in detections:
+            key = (
+                str(detection.get("object_name", "")),
+                tuple(detection.get("bbox", [])),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(detection)
+
+        return unique

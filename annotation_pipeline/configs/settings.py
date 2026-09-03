@@ -248,6 +248,7 @@ class PipelineParams:
     run_grounding: bool
     run_segmentation: bool
     run_annotation: bool
+    run_semantic_verification: bool
 
     save_intermediate_cache: bool
     save_pipeline_cache: bool
@@ -255,7 +256,6 @@ class PipelineParams:
     save_visualizations: bool
 
     num_images: int
-    batch_size : int
     locate_anything_batch_size : int
     gemma_batch_size : int
     interval_seconds: int
@@ -267,7 +267,7 @@ class PipelineParams:
     supported_image_extensions: list
 
 # ============================================================================
-# Pipelie Configuration
+# Pipeline Configuration
 # ============================================================================
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -519,6 +519,7 @@ def load_config(
         run_grounding=raw["run_grounding"],
         run_segmentation=raw["run_segmentation"],
         run_annotation=raw["run_annotation"],
+        run_semantic_verification=raw["run_semantic_verification"],
 
         save_intermediate_cache=raw["save_intermediate_cache"],
         save_pipeline_cache=raw["save_pipeline_cache"],
@@ -526,7 +527,6 @@ def load_config(
         save_visualizations=raw["save_visualizations"],
 
         num_images=raw["num_images"],
-        batch_size=raw["batch_size"],
         gemma_batch_size=raw["gemma_batch_size"],
         locate_anything_batch_size=raw["locate_anything_batch_size"],
         interval_seconds=raw["interval_seconds"],

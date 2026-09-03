@@ -288,3 +288,137 @@ class OntologyEngine:
         )
 
         return ontology_result
+
+    def reason_recovered_scene_object(
+        self,
+        scene_object: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Re-run ontology reasoning for a scene object produced by the
+        semantic recovery pass.
+
+        This method performs ontology reasoning only.
+
+        Locate Anything is intentionally not involved.
+        """
+
+        retrieval_query = self.query_builder.build(
+            scene_object,
+        )
+
+        result = self.reasoner.reason(
+            retrieval_query,
+        )
+
+        if result.predicted_class is None:
+
+            return {
+                "retrieval_query": retrieval_query.embedding_text,
+                "prediction": {
+                    "class_id": None,
+                    "class_name": None,
+                    "score": 0.0,
+                    "grounding_prompt": None,
+                },
+                "top_candidates": [],
+            }
+
+        predicted_entry = (
+            result.predicted_class.entry
+        )
+
+        return {
+            "retrieval_query": (
+                retrieval_query.embedding_text
+            ),
+
+            "prediction": {
+                "class_id": predicted_entry.class_id,
+                "class_name": predicted_entry.class_name,
+                "score": result.predicted_class.final_score,
+                "grounding_prompt": getattr(
+                    predicted_entry,
+                    "grounding_prompt",
+                    None,
+                ),
+            },
+
+            "top_candidates": [
+                {
+                    "class_id": candidate.entry.class_id,
+                    "class_name": candidate.entry.class_name,
+                    "score": candidate.final_score,
+                    "embedding_score": candidate.embedding_score,
+                    "attribute_score": candidate.attribute_score,
+                    "final_score": candidate.final_score,
+                }
+                for candidate in result.candidates
+            ],
+        }
+
+    def reason_recovered_scene_object(
+        self,
+        scene_object: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Re-run ontology reasoning for a scene object produced by the
+        semantic recovery pass.
+
+        This method performs ontology reasoning only.
+
+        Locate Anything is intentionally not involved.
+        """
+
+        retrieval_query = self.query_builder.build(
+            scene_object,
+        )
+
+        result = self.reasoner.reason(
+            retrieval_query,
+        )
+
+        if result.predicted_class is None:
+
+            return {
+                "retrieval_query": retrieval_query.embedding_text,
+                "prediction": {
+                    "class_id": None,
+                    "class_name": None,
+                    "score": 0.0,
+                    "grounding_prompt": None,
+                },
+                "top_candidates": [],
+            }
+
+        predicted_entry = (
+            result.predicted_class.entry
+        )
+
+        return {
+            "retrieval_query": (
+                retrieval_query.embedding_text
+            ),
+
+            "prediction": {
+                "class_id": predicted_entry.class_id,
+                "class_name": predicted_entry.class_name,
+                "score": result.predicted_class.final_score,
+                "grounding_prompt": getattr(
+                    predicted_entry,
+                    "grounding_prompt",
+                    None,
+                ),
+            },
+
+            "top_candidates": [
+                {
+                    "class_id": candidate.entry.class_id,
+                    "class_name": candidate.entry.class_name,
+                    "score": candidate.final_score,
+                    "embedding_score": candidate.embedding_score,
+                    "attribute_score": candidate.attribute_score,
+                    "final_score": candidate.final_score,
+                }
+                for candidate in result.candidates
+            ],
+        }

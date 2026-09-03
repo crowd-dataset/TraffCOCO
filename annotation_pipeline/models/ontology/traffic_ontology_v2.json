@@ -27500,199 +27500,218 @@
       "grounding_prompt": "red and white striped pole marker"
     },
     {
-      "class_id": "D001",
-      "class_name": "traffic_light_3_phase",
-      "country": "Global",
-      "traffic_standard": null,
-      "super_category": "traffic_signal",
-      "parent_category": "traffic_signal",
-      "description": "Red-amber-green vehicle signal at intersections",
-      "purpose": "Detect traffic light 3 phase for intersection and junction control understanding",
-      "visual_attributes": {
-        "typical_shapes": [
-          "vertical column with three circular lenses",
-          "traffic signal head",
-          "rectangular housing"
-        ],
-        "typical_colors": [
-          "red",
-          "amber",
-          "yellow",
-          "green",
-          "black housing"
-        ],
-        "border_color": [
-          "varied"
-        ],
-        "background_color": [
-          "black",
-          "dark housing"
-        ],
-        "text_color": [
-          "varied"
-        ],
-        "material": [
-          "metal housing",
-          "polycarbonate lens",
-          "steel pole",
-          "aluminum housing",
-          "LED module",
-          "cast iron bracket"
-        ],
-        "reflective": null,
-        "visual_characteristics": [
-          "red-green-yellow signal head with three lights vertically"
-        ]
-      },
-      "text_information": {
-        "common_text": [],
-        "languages": [],
-        "common_symbols": [
-          "traffic light",
-          "stoplight",
-          "signal",
-          "3-phase",
-          "red light"
-        ]
-      },
-      "installation": {
-        "mounted_on": [
-          "traffic signal pole"
-        ],
-        "orientation": "vertical",
-        "typical_height": "3.0-6.0m"
-      },
-      "context": {
-        "typical_location": [
-          "intersection",
-          "crosswalk",
-          "railway crossing",
-          "roadworks"
-        ],
-        "road_types": [
-          "urban",
-          "highway"
-        ],
-        "urban_rural": [
-          "urban",
-          "suburban"
-        ],
-        "frequently_nearby_objects": [
-          "stop_line",
-          "zebra_crossing",
-          "pedestrian",
-          "car",
-          "intersection",
-          "lane_divider_broken",
-          "traffic_island",
-          "sidewalk"
-        ]
-      },
-      "relationships": {
-        "parent": "traffic_signal",
-        "children": [],
-        "related_classes": [],
-        "common_confusions": [
-          {
-            "class": "traffic_light_2_phase",
-            "reason_for_confusion": "both are vertical signal heads on poles",
-            "distinguishing_feature": "3-phase has three lights (red amber green); 2-phase has only two (red green)"
-          },
-          {
-            "class": "countdown_signal",
-            "reason_for_confusion": "both include signal heads at intersections",
-            "distinguishing_feature": "countdown signal has a numerical display alongside the light heads"
-          }
-        ]
-      },
-      "semantic_information": {
-        "keywords": [
-          "traffic light",
-          "stoplight",
-          "signal",
-          "3-phase",
-          "red amber green",
-          "traffic signal",
-          "intersection light"
-        ],
-        "synonyms": [
-          "traffic light",
-          "stoplight",
-          "traffic signal",
-          "signal light",
-          "red-amber-green signal",
-          "traffic lights"
-        ],
-        "aliases": [
-          "traffic_signal",
-          "3-phase signal",
-          "tricolor signal"
-        ]
-      },
-      "inference_cues": {
+        "class_id": "D001",
+        "class_name": "traffic_light_3_phase",
+        "country": "Global",
+        "traffic_standard": null,
+        "super_category": "traffic_signal",
+        "parent_category": "traffic_signal",
+
+        "description": "Three-lens vehicle traffic signal whose active signal state cannot be reliably determined.",
+
+        "purpose": "Represent a three-lens traffic signal when its signal state is not visually detectable.",
+
+        "visual_attributes": {
+            "typical_shapes": [
+            "vertical signal head",
+            "rectangular signal housing"
+            ],
+            "typical_colors": [
+            "red",
+            "amber",
+            "yellow",
+            "green",
+            "black"
+            ],
+            "border_color": [
+            "varied"
+            ],
+            "background_color": [
+            "black",
+            "dark housing"
+            ],
+            "text_color": [],
+            "material": [
+            "metal housing",
+            "polycarbonate lens",
+            "aluminum housing"
+            ],
+            "reflective": null,
+
+            "visual_characteristics": [
+            "three visible signal lenses or positions arranged as a traffic signal head",
+            "three-lens structure is visually identifiable",
+            "active signal state is not reliably distinguishable"
+            ]
+        },
+
+        "text_information": {
+            "common_text": [],
+            "languages": [],
+            "common_symbols": [
+            "traffic light",
+            "traffic signal",
+            "three-lens signal"
+            ]
+        },
+
+        "installation": {
+            "mounted_on": [
+            "traffic signal pole",
+            "gantry",
+            "overhead signal support"
+            ],
+            "orientation": "typically vertical",
+            "typical_height": "unknown"
+        },
+
+        "context": {
+            "typical_location": [
+            "intersection",
+            "junction",
+            "crosswalk",
+            "roadside"
+            ],
+            "road_types": [
+            "urban",
+            "highway",
+            "rural"
+            ],
+            "urban_rural": [
+            "urban",
+            "suburban",
+            "rural"
+            ],
+            "frequently_nearby_objects": [
+            "stop_line",
+            "crosswalk",
+            "pedestrian",
+            "car",
+            "lane_divider_broken",
+            "traffic_island"
+            ]
+        },
+
+        "relationships": {
+            "parent": "traffic_signal",
+            "children": [],
+            "related_classes": [],
+
+            "common_confusions": [
+            {
+                "class": "traffic_light_2_phase",
+                "reason_for_confusion": "Both are traffic signal heads, but the number of visible lens positions differs.",
+                "distinguishing_feature": "D001 requires three visible lens positions."
+            },
+            {
+                "class": "flashing_beacon",
+                "reason_for_confusion": "Both may show an illuminated coloured light.",
+                "distinguishing_feature": "D001 requires a three-lens traffic signal head."
+            },
+            {
+                "class": "traffic_signal",
+                "reason_for_confusion": "A generic traffic signal may be visible without enough information to determine its configuration.",
+                "distinguishing_feature": "D001 requires three visible lens positions."
+            }
+            ]
+        },
+
+        "semantic_information": {
+            "keywords": [
+            "three lens traffic light",
+            "three lens traffic signal",
+            "three aspect signal",
+            "traffic signal state unreadable",
+            "traffic signal state unknown",
+            "traffic signal state not visible"
+            ],
+
+            "synonyms": [
+            "three-lens traffic light",
+            "three-aspect traffic signal",
+            "three-phase traffic light"
+            ],
+
+            "aliases": [
+            "traffic_light_3_phase",
+            "three-lens signal",
+            "three-aspect signal"
+            ]
+    },
+
+    "inference_cues": {
         "likely_descriptions": [
-          "A vertical traffic signal with three circular lights — red on top, amber in middle, green at bottom",
-          "Traffic light with red, yellow, and green lenses stacked vertically on a pole",
-          "Tricolor signal head mounted on a metal pole at an intersection",
-          "Standard three-aspect traffic signal controlling vehicle movements",
-          "Red-amber-green traffic light at a road junction",
-          "Dark metal housing with three circular coloured lenses on a signal pole"
+        "Traffic signal with three visible lenses but the active state cannot be determined",
+        "Three-lens traffic signal with unreadable signal state",
+        "Three-position traffic signal where illumination state is unclear",
+        "Three visible signal heads with glare or distance preventing state identification",
+        "Traffic signal with red, amber and green positions visible but no reliable active state"
         ]
-      },
-      "example_images": [],
-      "sources": {
+    },
+
+    "example_images": [],
+
+    "sources": {
         "from_taxonomy": [
-          "Category D - Traffic Signals"
+        "Category D - Traffic Signals"
         ],
         "inferred": [],
         "traffic_standard": "Global"
-      },
-      "object_type": "traffic_signal",
-      "embedding_text": "The traffic light 3 phase is a traffic signal found globally. Red-amber-green vehicle signal at intersections It has a vertical column with three circular lenses shape with a black background. Primary colors: red, amber, yellow, green. red-green-yellow signal head with three lights vertically. Typically made of metal housing, polycarbonate lens, steel pole, aluminum housing. Associated symbols: 3-phase, red light. Mounted on traffic signal pole. Typical installation height: 3.0-6.0m. Typically found at intersection, crosswalk, railway crossing, roadworks. Common on urban, highway roads. Often appears near stop_line, zebra_crossing, pedestrian, car, intersection. Key distinguishing features: Three circular lenses arranged vertically — always red (top), amber (middle), green (bottom). Also known as: traffic light, stoplight, traffic signal, signal light, red-amber-green signal. A Vision-Language Model may describe this as: \"A vertical traffic signal with three circular lights — red on top, amber in middle, green at bottom\". Search keywords: traffic light, stoplight, signal, 3-phase, red amber green, traffic signal, intersection light.",
-      "distinctive_features": [
-        "Three circular lenses arranged vertically — always red (top), amber (middle), green (bottom)",
-        "Dark metal or polycarbonate housing distinguishes it from other lights",
-        "Only illuminated light of the three is active at any time",
-        "Mounted at intersections on poles typically 3-6m high",
-        "Visor shades above each lens prevent sunlight interference"
-      ],
-      "common_confusions": [
+    },
+
+    "object_type": "traffic_signal",
+
+    "embedding_text": "A three-lens traffic signal whose active signal state cannot be reliably determined. The signal has three visible lens positions in a traffic signal housing. The three-lens structure must be visually identifiable, while the active state may be unreadable because of distance, glare, blur, occlusion or image quality. Do not use this class when the signal has fewer than three visible lens positions or when a different signal configuration is clearly identifiable. This class represents signal configuration plus unknown or unreadable active state.",
+
+    "distinctive_features": [
+        "Three visible signal lens positions",
+        "Traffic signal housing",
+        "Active signal state cannot be reliably determined"
+    ],
+
+    "common_confusions": [
         {
-          "class": "traffic_light_2_phase",
-          "reason_for_confusion": "both are vertical signal heads on poles",
-          "distinguishing_feature": "3-phase has three lights (red amber green); 2-phase has only two (red green)"
+        "class": "traffic_light_2_phase",
+        "reason_for_confusion": "Both are traffic signal heads.",
+        "distinguishing_feature": "D001 requires three visible lens positions."
         },
         {
-          "class": "countdown_signal",
-          "reason_for_confusion": "both include signal heads at intersections",
-          "distinguishing_feature": "countdown signal has a numerical display alongside the light heads"
+        "class": "flashing_beacon",
+        "reason_for_confusion": "Both may contain illuminated coloured lights.",
+        "distinguishing_feature": "D001 requires a three-lens signal head rather than a single flashing beacon."
         }
-      ],
-      "negative_cues": [
-        "Only one or two light positions visible — may be 2-phase",
-        "Lights are yellow-only flashing — that is a beacon",
-        "No housing visible — may be a reflective sign",
-        "Object does not emit or display coloured light",
-        "Object is a static retroreflective sign — not a signal",
-        "Object is a billboard or advertising display"
-      ],
-      "attribute_importance": {
-        "shape": 4,
-        "color": 5,
-        "text": 1,
-        "symbol": 4,
+    ],
+
+    "negative_cues": [
+        "Only one or two lens positions are visible",
+        "Signal configuration cannot be determined",
+        "Active signal state is clearly visible and another state-specific class is applicable",
+        "Single flashing light",
+        "Yellow-only beacon",
+        "Pedestrian signal",
+        "Bicycle signal",
+        "Static reflective sign",
+        "No traffic signal housing or lens structure visible"
+    ],
+
+    "attribute_importance": {
+        "shape": 5,
+        "color": 4,
+        "text": 0,
+        "symbol": 2,
         "context": 3,
-        "location": 3
-      },
-      "detection_priority": [
-        "color_of_active_light",
-        "number_of_light_heads",
-        "symbol_on_face",
-        "mounting_height",
+        "location": 2
+    },
+
+    "detection_priority": [
+        "number_of_visible_lens_positions",
+        "signal_head_structure",
+        "ability_to_determine_active_signal_state",
         "housing_shape",
-        "surrounding_context"
-      ],
-      "grounding_prompt": "traffic light"
+        "mounting"
+    ],
+
+    "grounding_prompt": "traffic light"
     },
     {
       "class_id": "D002",

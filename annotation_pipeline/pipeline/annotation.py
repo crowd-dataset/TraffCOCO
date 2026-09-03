@@ -110,7 +110,7 @@ class AnnotationEngine:
         )
 
         logger.info(
-            "Annotation cache: %s",
+            "Annotation cache: {}",
             cache_path,
         )
 
@@ -177,7 +177,7 @@ class AnnotationEngine:
         )
 
         logger.info(
-            "Final visualization written to: %s",
+            "Final visualization written to: {}",
             output_path,
         )
 
@@ -213,7 +213,7 @@ class AnnotationEngine:
 
             except Exception:
                 logger.exception(
-                    "Annotation failed for %s",
+                    "Annotation failed for {}",
                     image_path.name,
                 )
 
@@ -496,7 +496,7 @@ class AnnotationEngine:
                     logger.info(
                         "Removing duplicate unreadable "
                         "traffic-sign detection because "
-                        "specific class '%s' overlaps it "
+                        "specific class '{}' overlaps it "
                         "(IoU=%.2f).",
                         other_class,
                         iou,
@@ -769,7 +769,9 @@ class AnnotationEngine:
         # class name.
         # ------------------------------------------------------------
 
-        valid_ids_by_label: dict[str, int] = {}
+        # Map canonical label -> set of candidate object IDs (do NOT
+        # silently select a single ID using setdefault or first-seen).
+        valid_ids_by_label: dict[str, set[int]] = {}
 
         for scene_object in scene_objects:
 
@@ -792,15 +794,17 @@ class AnnotationEngine:
                     label
                 )
 
-                if normalized_label:
-                    valid_ids_by_label.setdefault(
-                        normalized_label,
-                        object_id,
-                    )
+                if not normalized_label:
+                    continue
+
+                valid_ids_by_label.setdefault(
+                    normalized_label,
+                    set(),
+                ).add(object_id)
 
         logger.debug(
-            "Canonical grounding label -> object_id map: %s",
-            valid_ids_by_label,
+            "Canonical grounding label -> candidate object_ids: {}",
+            {k: sorted(list(v)) for k, v in valid_ids_by_label.items()},
         )
 
         # ------------------------------------------------------------
@@ -841,20 +845,25 @@ class AnnotationEngine:
                 raw_label
             )
 
-            resolved_id = valid_ids_by_label.get(
-                normalized_label
-            )
+            candidate_ids = valid_ids_by_label.get(normalized_label)
 
-            if resolved_id is not None:
+            if candidate_ids:
+                # ONE candidate -> resolve; multiple -> leave unresolved
+                if len(candidate_ids) == 1:
+                    resolved_id = next(iter(candidate_ids))
+                    grounding["object_id"] = resolved_id
 
-                grounding["object_id"] = resolved_id
-
-                logger.debug(
-                    "Resolved None grounding ID: "
-                    "label=%r -> object_id=%d",
-                    raw_label,
-                    resolved_id,
-                )
+                    logger.debug(
+                        "Resolved None grounding ID: "
+                        "label=%r -> object_id=%d",
+                        raw_label,
+                        resolved_id,
+                    )
+                else:
+                    # Ambiguous: attach candidate list for diagnostics and do not pick.
+                    grounding.setdefault("_match_metadata", {})
+                    grounding["_match_metadata"]["candidate_ids"] = sorted(list(candidate_ids))
+                    grounding["_match_metadata"]["match_type"] = "ambiguous_label_candidates"
 
         # ------------------------------------------------------------
         # 4. Build direct object_id lookup.
@@ -903,7 +912,7 @@ class AnnotationEngine:
             if bbox is None:
                 dropped_invalid_bbox += 1
                 logger.debug(
-                    "Skipping invalid grounding bbox: %s",
+                    "Skipping invalid grounding bbox: {}",
                     grounding.get("bbox"),
                 )
                 continue
@@ -951,7 +960,7 @@ class AnnotationEngine:
                 logger.warning(
                     "Could not associate Locate Anything detection "
                     "with an ontology scene object; preserving bbox: "
-                    "object_name=%s object_id=%s bbox=%s",
+                    "object_name={} object_id={} bbox={}",
                     grounding.get("object_name")
                     or grounding.get("ref"),
                     grounding_object_id,
@@ -1023,8 +1032,8 @@ class AnnotationEngine:
 
             logger.debug(
                 "Final detection resolved: "
-                "grounding=%r -> object_id=%s, "
-                "class_name=%r, class_id=%r, bbox=%s",
+                "grounding=%r -> object_id={}, "
+                "class_name=%r, class_id=%r, bbox={}",
                 grounding.get("object_name")
                 or grounding.get("ref"),
                 canonical_object_id,
