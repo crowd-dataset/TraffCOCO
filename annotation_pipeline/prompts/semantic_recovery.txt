@@ -1,73 +1,156 @@
-You are re-examining ONE traffic sign that was previously classified as
-unreadable.
+You are an expert traffic-scene understanding model performing SEMANTIC RECOVERY for ONE ALREADY-LOCALIZED candidate.
 
-Two images are provided:
-1. the ORIGINAL image for context
-2. a CROPPED region containing the target traffic sign
+The candidate was localized by Locate Anything. Its bbox is authoritative.
+DO NOT detect objects or change, refine, expand, shrink, or replace the bbox.
 
-The CROPPED REGION is the PRIMARY evidence.
-Use the original image only as supporting context.
+INPUT:
+1. ORIGINAL FULL IMAGE for context.
+2. NORMALIZED bbox [x1,y1,x2,y2], where all coordinates are in [0,1].
+Inspect the exact bbox region in the full image and use surrounding context only to understand it.
 
-Identify the sign only when its semantic identity is highly certain from
-the visible sign itself.
+TASK
+Determine whether the bbox contains a real, detectable traffic-related object.
 
-Inspect:
-- visible text
-- pictograms
-- arrows
-- numbers
-- symbols
-- shape
-- colours
-- border
-- background
-- supplementary plates
-- clearly visible writing systems
+If valid and identifiable from DIRECT VISUAL EVIDENCE:
+- return the most specific reliable object identity;
+- assign exactly one allowed object_group;
+- provide a concise description.
 
-Do NOT guess from:
-- road context
-- sign location
-- nearby objects
-- common traffic conventions
-- likely purpose
-- ontology expectations
+If valid but the exact class is uncertain:
+- return the most specific generic traffic-object description supported by the image;
+- NEVER guess a fine-grained class.
 
-Do NOT invent text, symbols, arrows, languages, countries, or meaning.
+If the bbox does not contain a valid detectable traffic object:
+- return "discard": true;
+- return empty observed_object/object_group/description;
+- do NOT invent a replacement.
 
-If the sign remains insufficiently clear to identify, use:
-"unreadable traffic sign"
+Discard false positives such as:
+- background, texture, shadow, glare, reflection, compression/noise;
+- non-traffic objects;
+- road, asphalt, pavement, sidewalk;
+- buildings, vegetation, sky, terrain;
+- invalid localization;
+- regions too ambiguous to establish a traffic object.
 
-Return EXACTLY ONE JSON object using this schema:
+A bbox existing is NOT evidence that an object is valid.
 
+TRAFFIC OBJECTS
+Consider:
+- traffic signs, supplementary plates, guide/warning/regulatory/mandatory/
+  prohibition/parking/temporary signs, overhead signs, variable-message signs;
+- traffic/pedestrian/bicycle/bus signals;
+- lane boundaries, centre/edge lines, stop lines, crosswalks/zebra crossings,
+  arrows, bicycle/bus markings, painted road text, chevrons/hatching;
+- guardrails, barriers, medians, bollards, delineators, cones, temporary
+  barriers, streetlights, traffic cameras, gantries, bridges/tunnels;
+- cars, taxis, vans, buses, trucks, motorcycles, bicycles, pedestrians,
+  riders, cyclists and animals.
+
+Do not return ordinary utility poles or non-traffic structures.
+
+TRAFFIC SIGNS
+Inspect the visible sign board: geometry, border/background, pictograms,
+arrows, text, supplementary plates and mounting.
+
+A sign remains valid even when its text/symbol cannot be identified.
+Use "unreadable" only when visible text/symbol exists but cannot be
+deciphered/identified. Use "none" when no text/symbol is visible.
+Never invent text, symbols, language, country or traffic rules.
+Unreadable text does not make the entire sign unreadable.
+
+TRAFFIC SIGNALS
+Inspect the individual signal head. If a red, yellow or green lens is
+visibly illuminated, preserve that active colour and lens position in the
+description. Do not infer hidden lenses, heads or states.
+A distant coloured light alone is not enough evidence of a traffic signal.
+
+SEMANTIC RULES
+Use only CLEAR, DIRECT visual evidence.
+
+Evidence priority:
+1. visible text, symbols and pictograms
+2. geometry and layout
+3. clearly recognizable identity
+4. generic physical description
+
+Do NOT infer identity from shape/colour alone, text layout, mounting,
+road location, surrounding objects, traffic conventions, or similarity to
+an ontology class.
+
+If several classes remain plausible, use a generic physical description.
+Do NOT assign ontology class IDs.
+
+OBJECT GROUP
+Use exactly one:
+vehicle
+road_user
+animal
+traffic_sign
+traffic_signal
+road_marking
+road_infrastructure
+infrastructure
+temporary_object
+country_specific
+
+Examples:
+car/bus/truck -> vehicle
+pedestrian/cyclist/rider -> road_user
+sign -> traffic_sign
+signal -> traffic_signal
+crosswalk/lane divider/arrow -> road_marking
+guardrail/bollard/delineator/median -> road_infrastructure
+
+Do not use fine-grained ontology classes or "person" as object_group.
+
+DESCRIPTION
+For a kept object, provide a concise description of about 30–70 words using
+ONLY observable characteristics. Include relevant colour, shape, markings,
+text, pictograms, arrows, signal state/lens position, mounting, material,
+damage or occlusion when visible.
+
+For signs describe geometry, border/background, pictogram, text, plates and
+mounting.
+For road markings describe pattern, direction, symbols, continuity, wear
+and orientation.
+For signals explicitly describe the illuminated lens when visible.
+
+DISCARD
+"discard": false = valid traffic object.
+"discard": true = invalid/non-detectable object.
+
+When discard=true:
+- observed_object=""
+- object_group=""
+- description=""
+
+For a current annotation of "none", inspect the actual bbox carefully.
+If it contains a valid traffic object, identify it using these same rules.
+If it does not, discard it.
+
+OUTPUT ONLY ONE VALID JSON OBJECT. NO MARKDOWN OR EXPLANATION.
+
+Valid:
 {
-    "observed_object": "...",
-    "object_group": "traffic_sign",
-    "description": "...",
-    "visual_attributes": {
-        "primary_color": "...",
-        "secondary_color": "...",
-        "shape": "...",
-        "border": {
-            "shape": "...",
-            "color": "..."
-        },
-        "background_color": "...",
-        "material": "...",
-        "reflective": true | false | "unknown",
-        "text": "...",
-        "symbol": "...",
-        "distinguishing_features": [
-            "...",
-            "..."
-        ]
-    }
+  "discard": false,
+  "observed_object": "...",
+  "object_group": "...",
+  "description": "..."
 }
 
-Use "unreadable" only when visible text or a visible pictogram exists
-but cannot be deciphered.
+Discard:
+{
+  "discard": true,
+  "observed_object": "",
+  "object_group": "",
+  "description": ""
+}
 
-Use "none" when text or a symbol is visibly absent.
-
-Use "unknown" when an attribute cannot be visually determined.
-
-Return ONLY valid JSON.
+FINAL CHECK:
+1. Is there actually a traffic object inside the bbox?
+2. Is its identity directly supported?
+3. Is object_group allowed?
+4. Is it free of excluded scene elements?
+5. If not a valid detectable traffic object, discard it.
+6. Never keep a false positive merely because Locate Anything supplied the bbox.

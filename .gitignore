@@ -236,6 +236,9 @@ outputs
 # LocateAnything downloaded model
 .locateanything_model/
 
+# sam2 downloaded model
+sam2_repo/
+
 # Generated pipeline outputs
 visualizations/
 json_outputs_scene_/

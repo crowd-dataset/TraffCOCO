@@ -109,10 +109,7 @@ class AnnotationEngine:
             image_path
         )
 
-        logger.info(
-            "Annotation cache: {}",
-            cache_path,
-        )
+        logger.info("Annotation cache: %s", cache_path)
 
         cache = self._load_cache(
             cache_path
@@ -176,10 +173,7 @@ class AnnotationEngine:
             output_path=output_path,
         )
 
-        logger.info(
-            "Final visualization written to: {}",
-            output_path,
-        )
+        logger.info("Final visualization written to: %s", output_path)
 
         return final_detections
 
