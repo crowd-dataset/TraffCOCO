@@ -154,6 +154,49 @@ additional identical vehicles.
 
 Pay special attention to small, distant and partially visible objects.
 
+
+==================================================
+YOLOPv2 OWNERSHIP IN THIS PIPELINE
+==================================================
+
+YOLOPv2 is the auxiliary detector for the following generic road-user
+classes:
+
+• person
+• rider
+• car
+• truck
+• bus
+• train
+• motorcycle
+• bicycle
+
+Traffic light and traffic sign are NOT imported from YOLOPv2 into the final
+auxiliary detection set. They remain with the VLM / Locate Anything branch.
+
+Specialized vehicle identities are also NOT owned by YOLOPv2. If visually
+supported, preserve specialized identities such as:
+
+• police car
+• taxi
+• ambulance
+• fire truck
+• tow truck
+• service vehicle
+• delivery vehicle
+
+These remain with the VLM / Locate Anything branch.
+
+YOLOPv2 also does not own road markings or traffic infrastructure such as
+guardrails, bollards, delineators, traffic cones, street lights, gantries,
+bridges or tunnels.
+
+The purpose of this ownership split is to avoid duplicate generic road-user
+detections while preserving traffic-specific objects outside YOLOPv2's
+closed set.
+
+Do not assign ontology IDs from this section.
+
 ==================================================
 SEMANTIC INTERPRETATION
 ==================================================
@@ -380,8 +423,6 @@ Never return:
 • road
 • road surface
 • asphalt
-• pavement
-• sidewalk
 • buildings
 • houses
 • offices

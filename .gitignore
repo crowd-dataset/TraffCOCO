@@ -239,6 +239,9 @@ outputs
 # sam2 downloaded model
 sam2_repo/
 
+#yolopv2 downloaded model
+yolopv2_repo/
+
 # Generated pipeline outputs
 visualizations/
 json_outputs_scene_/

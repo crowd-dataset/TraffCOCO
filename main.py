@@ -49,7 +49,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw
+import numpy as np
+import cv2
 import torch
 import time
 import gc
@@ -88,6 +90,7 @@ from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_
 from annotation_pipeline.models.segmentation.sam2_segmenter import (
     SAM2SegmentationEngine,
 )
+from annotation_pipeline.models.yolopv2 import YOLOPv2SegmentationEngine
 
 logger = CustomLogger(__name__)
 
@@ -3175,6 +3178,224 @@ def load_current_run_final_detections_for_sam(
     return recovered
 
 # ============================================================================
+# FINAL OUTPUT COMPOSITING
+# ============================================================================
+
+def _load_rgba_image(path: Path, size: tuple[int, int] | None = None) -> Image.Image | None:
+    """Load an image as RGBA, optionally resizing it to the requested size."""
+    try:
+        image = Image.open(path).convert("RGBA")
+        if size is not None and image.size != size:
+            image = image.resize(size, Image.Resampling.LANCZOS)
+        return image
+    except Exception as exc:
+        logger.warning("Could not load final-output image '{}': {}", path, exc)
+        return None
+
+
+def _overlay_binary_mask(
+    base: Image.Image,
+    mask_path: Path,
+    rgba: tuple[int, int, int, int],
+) -> Image.Image:
+    """Overlay a YOLOPv2 binary mask on an RGBA image."""
+    if not mask_path.exists():
+        return base
+
+    try:
+        mask = Image.open(mask_path).convert("L")
+        if mask.size != base.size:
+            mask = mask.resize(base.size, Image.Resampling.NEAREST)
+
+        alpha = np.asarray(mask, dtype=np.uint8)
+        if not np.any(alpha):
+            return base
+
+        overlay = np.zeros(
+            (base.height, base.width, 4),
+            dtype=np.uint8,
+        )
+        overlay[:, :, 0] = rgba[0]
+        overlay[:, :, 1] = rgba[1]
+        overlay[:, :, 2] = rgba[2]
+        overlay[:, :, 3] = (
+            (alpha > 0).astype(np.uint8) * rgba[3]
+        )
+
+        return Image.alpha_composite(
+            base,
+            Image.fromarray(overlay, mode="RGBA"),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not overlay YOLOPv2 mask '{}': {}",
+            mask_path,
+            exc,
+        )
+        return base
+
+
+def _draw_final_detections(
+    base: Image.Image,
+    detections: list[dict[str, Any]],
+) -> Image.Image:
+    """Draw final fused detections on the already segmented base image."""
+    rendered = base.copy().convert("RGBA")
+    draw = ImageDraw.Draw(rendered)
+
+    for detection in detections:
+        if not isinstance(detection, dict):
+            continue
+
+        bbox = detection.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+
+        try:
+            x1, y1, x2, y2 = map(float, bbox)
+        except (TypeError, ValueError):
+            continue
+
+        label = (
+            detection.get("class_name")
+            or detection.get("final_label")
+            or detection.get("observed_object")
+            or detection.get("grounding_prompt")
+            or detection.get("source")
+            or "object"
+        )
+
+        try:
+            score = float(detection.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+
+        text_label = f"{label} {score:.2f}"
+
+        # Keep YOLOPv2 and VLM/LA visually distinguishable while retaining
+        # one unified final image.
+        source = str(detection.get("source", "")).lower()
+        outline = (255, 80, 80, 255) if source == "yolopv2" else (80, 160, 255, 255)
+
+        draw.rectangle(
+            (x1, y1, x2, y2),
+            outline=outline,
+            width=2,
+        )
+
+        try:
+            text_bbox = draw.textbbox((x1, y1), text_label)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+        except Exception:
+            text_width = max(20, len(text_label) * 7)
+            text_height = 14
+
+        text_y = max(0, y1 - text_height - 2)
+
+        # Small background improves readability without hiding the image.
+        draw.rectangle(
+            (x1, text_y, x1 + text_width + 4, text_y + text_height + 2),
+            fill=(0, 0, 0, 170),
+        )
+        draw.text(
+            (x1 + 2, text_y + 1),
+            text_label,
+            fill=(255, 255, 255, 255),
+        )
+
+    return rendered
+
+
+def create_final_output(
+    config: Any,
+    image_path: Path,
+    final_detections: list[dict[str, Any]],
+) -> Path:
+    """Create the single user-facing final result in outputs/FINAL.
+
+    Composition order:
+        1. original image
+        2. YOLOPv2 drivable-area mask
+        3. YOLOPv2 lane-line mask
+        4. SAM 2 segmented visualization, when available
+        5. final fused detection boxes/labels
+
+    SAM's segmented image is used as the visual base when available, while
+    YOLOPv2 semantic road masks are explicitly composited so both model
+    outputs are visible in the same final artifact.
+    """
+
+    final_dir = config.paths.outputs / "FINAL"
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = image_path.stem
+    final_path = final_dir / f"{stem}_FINAL.png"
+
+    segmentation_path = (
+        config.paths.outputs
+        / "segmentation"
+        / f"{stem}_segmented.png"
+    )
+
+    yolopv2_dir = (
+        config.paths.outputs
+        / "yolopv2_segmentation"
+    )
+
+    drivable_mask_path = (
+        yolopv2_dir / "masks" / f"{stem}_drivable.png"
+    )
+    lane_mask_path = (
+        yolopv2_dir / "masks" / f"{stem}_lane.png"
+    )
+
+    base = None
+
+    # Prefer the SAM 2 output because it contains the final instance
+    # segmentation. If SAM is disabled/failed, use the original image.
+    if segmentation_path.exists():
+        base = _load_rgba_image(segmentation_path)
+
+    if base is None:
+        base = _load_rgba_image(image_path)
+
+    if base is None:
+        raise RuntimeError(
+            f"Could not load an image for final output: {image_path}"
+        )
+
+    # Add YOLOPv2's native semantic road outputs to the same final image.
+    base = _overlay_binary_mask(
+        base,
+        drivable_mask_path,
+        (80, 200, 120, 80),
+    )
+
+    base = _overlay_binary_mask(
+        base,
+        lane_mask_path,
+        (255, 210, 60, 180),
+    )
+
+    # Draw the authoritative final fused detections last, so labels/boxes
+    # remain visible above both segmentation layers.
+    base = _draw_final_detections(
+        base,
+        final_detections,
+    )
+
+    base.convert("RGB").save(final_path)
+
+    logger.info(
+        "FINAL combined output saved for '{}' -> '{}'.",
+        image_path.name,
+        final_path,
+    )
+
+    return final_path
+
+# ============================================================================
 # Main Pipeline
 # ============================================================================
 
@@ -3261,6 +3482,11 @@ def main() -> None:
         action="store_true",
         help="Skip the final SAM 2 segmentation stage.",
     )
+    parser.add_argument(
+        "--no-yolopv2",
+        action="store_true",
+        help="Skip the auxiliary YOLOPv2 road-perception stage.",
+    )
 
     args = parser.parse_args()
 
@@ -3340,6 +3566,8 @@ def main() -> None:
     annotation_stage_time = 0.0
     semantic_verification_stage_time = 0.0
     sam_segmentation_stage_time = 0.0
+    yolopv2_stage_time = 0.0
+    final_output_stage_time = 0.0
     cleanup_stage_time = 0.0
 
     initialization_stage_start = pipeline_start
@@ -3788,12 +4016,100 @@ def main() -> None:
     )
 
     # ==============================================================
+    # YOLOPv2 AUXILIARY ROAD PERCEPTION
+    # ==============================================================
+
+    # YOLOPv2 replaces the old BDD100K auxiliary branch.
+    # Generic road users come from YOLOPv2; signs/signals, specialized
+    # vehicles and other out-of-set traffic objects remain with the VLM.
+    if not args.no_yolopv2 and getattr(
+        config.pipeline,
+        "run_yolopv2",
+        True,
+    ):
+        yolopv2_stage_start = time.perf_counter()
+        yolopv2_engine = None
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("YOLOPv2 AUXILIARY ROAD PERCEPTION")
+        logger.info("=" * 80)
+
+        try:
+            yolopv2_engine = YOLOPv2SegmentationEngine(
+                output_dir=(
+                    config.paths.outputs
+                    / "yolopv2_segmentation"
+                ),
+                device=getattr(
+                    config.pipeline,
+                    "yolopv2_device",
+                    None,
+                ),
+                image_size=getattr(
+                    config.pipeline,
+                    "yolopv2_image_size",
+                    640,
+                ),
+                confidence_threshold=getattr(
+                    config.pipeline,
+                    "yolopv2_confidence_threshold",
+                    0.30,
+                ),
+                iou_threshold=getattr(
+                    config.pipeline,
+                    "yolopv2_iou_threshold",
+                    0.45,
+                ),
+            )
+
+            yolopv2_detections_by_image = (
+                yolopv2_engine.process_images(image_paths)
+            )
+
+            logger.info(
+                "YOLOPv2 completed successfully. Detection counts: {}",
+                {
+                    image_name: len(detections)
+                    for image_name, detections
+                    in yolopv2_detections_by_image.items()
+                },
+            )
+
+        except Exception as exc:
+            logger.error(
+                "YOLOPv2 auxiliary stage failed: {}",
+                exc,
+            )
+            failed_images.extend(
+                (
+                    image_path.name,
+                    "YOLOPv2",
+                    str(exc),
+                )
+                for image_path in image_paths
+            )
+
+        finally:
+            cleanup_stage_resources(yolopv2_engine)
+            yolopv2_stage_time = (
+                time.perf_counter() - yolopv2_stage_start
+            )
+    else:
+        logger.info(
+            "YOLOPv2 auxiliary road perception skipped."
+        )
+
+    # ==============================================================
     # ANNOTATION
     # ==============================================================
 
     annotation_stage_start = time.perf_counter()
 
     final_detections_by_image: dict[str, list[dict[str, Any]]] = {}
+    # Independent auxiliary YOLOPv2 results. These bypass the LA
+    # annotation/postprocessing/semantic-verification branch.
+    yolopv2_detections_by_image: dict[str, list[dict[str, Any]]] = {}
 
     if config.pipeline.run_annotation:
 
@@ -4141,6 +4457,118 @@ def main() -> None:
                     ]
 
     # ==============================================================
+    # FUSE YOLOPv2 WITH FINAL VLM/LOCATE ANYTHING RESULTS
+    # ==============================================================
+
+    # YOLOPv2 is fused only after the LA branch and optional semantic
+    # verification are final. Overlapping LA detections take precedence,
+    # allowing a specialized VLM label (for example "police car") to replace
+    # a generic YOLOPv2 "car" for the same physical object.
+    def _bbox_iou(
+        bbox_a: list | tuple,
+        bbox_b: list | tuple,
+    ) -> float:
+        if (
+            not isinstance(bbox_a, (list, tuple))
+            or len(bbox_a) != 4
+            or not isinstance(bbox_b, (list, tuple))
+            or len(bbox_b) != 4
+        ):
+            return 0.0
+
+        try:
+            ax1, ay1, ax2, ay2 = map(float, bbox_a)
+            bx1, by1, bx2, by2 = map(float, bbox_b)
+        except (TypeError, ValueError):
+            return 0.0
+
+        ax1, ax2 = sorted((ax1, ax2))
+        ay1, ay2 = sorted((ay1, ay2))
+        bx1, bx2 = sorted((bx1, bx2))
+        by1, by2 = sorted((by1, by2))
+
+        iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+        inter = iw * ih
+
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter
+
+        return inter / union if union > 0 else 0.0
+
+    def _fuse_yolopv2_detections(
+        la_detections: list[dict[str, Any]],
+        yolopv2_detections: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        fused = list(la_detections)
+
+        for yolo_detection in yolopv2_detections:
+            if not isinstance(yolo_detection, dict):
+                continue
+
+            yolo_bbox = yolo_detection.get("bbox")
+            if not isinstance(yolo_bbox, (list, tuple)):
+                continue
+
+            # Any IoU >= 0.50 with a final LA detection is treated as the
+            # same physical object. LA therefore retains semantic authority.
+            duplicate = any(
+                _bbox_iou(
+                    yolo_bbox,
+                    la_detection.get("bbox"),
+                ) >= 0.50
+                for la_detection in la_detections
+                if isinstance(la_detection, dict)
+            )
+
+            if duplicate:
+                continue
+
+            fused.append({
+                **yolo_detection,
+                "source": "yolopv2",
+                "annotation_postprocessing_applied": False,
+                "semantic_verification_applied": False,
+            })
+
+        return fused
+
+    if yolopv2_detections_by_image:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("FUSING YOLOPv2 ROAD-USER DETECTIONS")
+        logger.info("=" * 80)
+
+        for image_path in image_paths:
+            image_name = image_path.name
+
+            la_final = final_detections_by_image.get(
+                image_name,
+                [],
+            )
+            yolopv2_final = yolopv2_detections_by_image.get(
+                image_name,
+                [],
+            )
+
+            final_detections_by_image[image_name] = (
+                _fuse_yolopv2_detections(
+                    la_detections=la_final,
+                    yolopv2_detections=yolopv2_final,
+                )
+            )
+
+            logger.info(
+                "YOLOPv2 fusion | image='{}' | LA={} | "
+                "YOLOPv2 raw={} | final={}",
+                image_name,
+                len(la_final),
+                len(yolopv2_final),
+                len(final_detections_by_image[image_name]),
+            )
+
+    # ==============================================================
     # FINAL SAM 2 SEGMENTATION
     # ==============================================================
 
@@ -4294,6 +4722,71 @@ def main() -> None:
             "Final SAM 2 segmentation skipped by --no-sam-segmentation."
         )
 
+    # ==============================================================
+    # FINAL COMBINED OUTPUT
+    # ==============================================================
+
+    # This is the single user-facing output. It combines:
+    #   - SAM 2 instance segmentation
+    #   - YOLOPv2 drivable-area segmentation
+    #   - YOLOPv2 lane-line segmentation
+    #   - final fused VLM/Locate Anything + YOLOPv2 detections
+    #
+    # It is deliberately created AFTER SAM 2 so it represents the true
+    # final state of the pipeline.
+    final_output_stage_start = time.perf_counter()
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("FINAL COMBINED OUTPUT")
+    logger.info("=" * 80)
+
+    for image_path in image_paths:
+        image_name = image_path.name
+        detections = final_detections_by_image.get(
+            image_name,
+            [],
+        )
+
+        try:
+            final_path = create_final_output(
+                config=config,
+                image_path=image_path,
+                final_detections=detections,
+            )
+
+            if image_name in stage_results:
+                stage_results[image_name]["visualization_path"] = str(
+                    final_path
+                )
+                stage_results[image_name]["final_output_path"] = str(
+                    final_path
+                )
+
+            if image_name in results:
+                results[image_name]["annotation"] = stage_results.get(
+                    image_name,
+                    results[image_name].get("annotation", {}),
+                )
+
+        except Exception as exc:
+            logger.error(
+                "Final combined output failed for '{}': {}",
+                image_name,
+                exc,
+            )
+            failed_images.append(
+                (
+                    image_name,
+                    "FINAL Output",
+                    str(exc),
+                )
+            )
+
+    final_output_stage_time = (
+        time.perf_counter() - final_output_stage_start
+    )
+
     # ------------------------------------------------------------------
     # Final stage-resource cleanup
     #
@@ -4339,7 +4832,9 @@ def main() -> None:
         + grounding_stage_time
         + annotation_stage_time
         + semantic_verification_stage_time
+        + yolopv2_stage_time
         + sam_segmentation_stage_time
+        + final_output_stage_time
         + cleanup_stage_time
     )
 
@@ -4411,6 +4906,15 @@ def main() -> None:
     logger.info(
         "SAM 2 Segmentation Time        : {:.2f} s",
         sam_segmentation_stage_time,
+    )
+    logger.info(
+        "YOLOPv2 Auxiliary Time          : {:.2f} s",
+        yolopv2_stage_time,
+    )
+
+    logger.info(
+        "Final Combined Output Time      : {:.2f} s",
+        final_output_stage_time,
     )
 
     logger.info(
@@ -4614,6 +5118,14 @@ def main() -> None:
     logger.info(
         "Final SAM 2 segmentation directory: {}",
         config.paths.outputs / "segmentation",
+    )
+    logger.info(
+        "YOLOPv2 auxiliary output directory: {}",
+        config.paths.outputs / "yolopv2_segmentation",
+    )
+    logger.info(
+        "FINAL combined output directory: {}",
+        config.paths.outputs / "FINAL",
     )
 
     logger.info("=" * 70)
