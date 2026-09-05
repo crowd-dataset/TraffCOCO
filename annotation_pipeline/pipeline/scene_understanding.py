@@ -81,6 +81,25 @@ class SceneUnderstandingEngine:
 
         self.last_total_tokens = 0
 
+    @staticmethod
+    def _normalize_confidence(
+        value: Any,
+    ) -> float | None:
+        """Normalize Scene Understanding self-reported confidence."""
+
+        if value is None:
+            return None
+
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        return max(
+            0.0,
+            min(1.0, confidence),
+        )
+
     # ------------------------------------------------------------------
     # Main API
     # ------------------------------------------------------------------
@@ -320,6 +339,17 @@ class SceneUnderstandingEngine:
                 )
 
             normalized.append(obj)
+
+            raw_confidence = obj.get(
+                "confidence",
+                obj.get("confidenc_score"),
+            )
+
+            obj["scene_confidence"] = self._normalize_confidence(
+                raw_confidence
+            )
+
+            obj.pop("confidenc_score", None)
 
         return normalized
 

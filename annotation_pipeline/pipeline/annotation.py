@@ -315,7 +315,21 @@ class AnnotationEngine:
                 if isinstance(prediction, dict):
                     flat["class_id"] = prediction.get("class_id")
                     flat["class_name"] = prediction.get("class_name")
-                    flat["score"] = prediction.get("score")
+                    flat["ontology_score"] = prediction.get(
+                        "ontology_score",
+                        prediction.get("score"),
+                    )
+
+                    flat["scene_confidence"] = ontology.get(
+                        "scene_confidence",
+                        scene_obj.get(
+                            "scene_confidence",
+                            scene_obj.get(
+                                "confidence",
+                                scene_obj.get("confidenc_score"),
+                            ),
+                        ),
+                    )
                     flat["grounding_prompt"] = prediction.get("grounding_prompt")
                     flat["ontology"] = prediction
             grounding = entry.get("grounding")
@@ -701,6 +715,63 @@ class AnnotationEngine:
         return None
 
     # ================================================================
+    # CONFIDENCE HELPERS
+    # ================================================================
+
+    @staticmethod
+    def _get_scene_confidence(
+        scene_object: dict[str, Any],
+    ) -> float | None:
+        """Return Scene Understanding self-reported confidence."""
+        value = scene_object.get(
+            "scene_confidence",
+            scene_object.get(
+                "confidence",
+                scene_object.get("confidenc_score"),
+            ),
+        )
+
+        if value is None:
+            return None
+
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        return max(0.0, min(1.0, confidence))
+
+    @staticmethod
+    def _get_ontology_score(
+        scene_object: dict[str, Any],
+    ) -> float | None:
+        """Return the ontology candidate-ranking score."""
+        value = scene_object.get("ontology_score")
+
+        if value is None:
+            ontology = scene_object.get("ontology")
+            if isinstance(ontology, dict):
+                value = ontology.get("ontology_score")
+
+        if value is None:
+            ontology_reasoning = scene_object.get("ontology_reasoning")
+            if isinstance(ontology_reasoning, dict):
+                prediction = ontology_reasoning.get("prediction")
+                if isinstance(prediction, dict):
+                    value = prediction.get(
+                        "ontology_score",
+                        prediction.get("score"),
+                    )
+
+        if value is None:
+            return None
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    # ================================================================
     # FINAL DETECTIONS
     # ================================================================
 
@@ -975,6 +1046,11 @@ class AnnotationEngine:
                             grounding.get("object_name")
                             or grounding.get("ref")
                         ),
+                        "scene_confidence": None,
+                        "ontology_score": None,
+                        "grounding_confidence": grounding.get(
+                            "grounding_confidence"
+                        ),
                     }
                 )
 
@@ -1020,6 +1096,15 @@ class AnnotationEngine:
                     "grounding_label": (
                         grounding.get("object_name")
                         or grounding.get("ref")
+                    ),
+                    "scene_confidence": self._get_scene_confidence(
+                        scene_object
+                    ),
+                    "ontology_score": self._get_ontology_score(
+                        scene_object
+                    ),
+                    "grounding_confidence": grounding.get(
+                        "grounding_confidence"
                     ),
                 }
             )

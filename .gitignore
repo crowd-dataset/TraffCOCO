@@ -253,3 +253,4 @@ annotation_pipeline/outputs/
 #tests
 tests/
 grounding_first/
+traffic_ontology_test.json

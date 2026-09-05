@@ -1,6 +1,6 @@
 {
   "ontology_name": "Traffic & Road Scene Global Ontology",
-  "version": "2.1",
+  "version": "2.2",
   "countries": [
     "United States",
     "Canada",
@@ -1221,11 +1221,11 @@
     {
       "class_id": "A008",
       "class_name": "wheelchair_user",
-      "country": "Developed Countries",
+      "country": "Global",
       "traffic_standard": null,
       "super_category": "road_user",
       "parent_category": "road_user",
-      "description": "Person using a manual or powered wheelchair",
+      "description": "Person using a manual or powered wheelchair on or near the road",
       "purpose": "Detect wheelchair user for traffic safety analysis",
       "visual_attributes": {
         "typical_shapes": [
@@ -2023,12 +2023,12 @@
           "high ground clearance"
         ],
         "typical_colors": [
-          "tall",
-          "boxy",
-          "vehicle",
-          "with",
-          "raised",
-          "suspension"
+          "white",
+          "black",
+          "silver",
+          "grey",
+          "red",
+          "blue"
         ],
         "border_color": [
           "varied"
@@ -2175,12 +2175,11 @@
           "cab plus open flatbed"
         ],
         "typical_colors": [
-          "truck",
-          "with",
-          "open",
-          "flatbed",
-          "at",
-          "rear"
+          "white",
+          "silver",
+          "black",
+          "red",
+          "grey"
         ],
         "border_color": [
           "varied"
@@ -2478,11 +2477,11 @@
           "long rectangular body"
         ],
         "typical_colors": [
-          "long",
-          "bus",
-          "with",
-          "route",
-          "display"
+          "white",
+          "red",
+          "blue",
+          "green",
+          "route-branded livery"
         ],
         "border_color": [
           "varied"
@@ -3105,11 +3104,10 @@
           "cylindrical tank on truck chassis"
         ],
         "typical_colors": [
-          "truck",
-          "with",
-          "cylindrical",
-          "tank",
-          "body"
+          "white",
+          "silver",
+          "grey",
+          "reflective tank markings"
         ],
         "border_color": [
           "varied"
@@ -3256,11 +3254,10 @@
           "spiral ridge pattern"
         ],
         "typical_colors": [
-          "truck",
-          "with",
-          "large",
-          "rotating",
-          "drum"
+          "white",
+          "yellow",
+          "orange",
+          "grey"
         ],
         "border_color": [
           "varied"
@@ -4186,12 +4183,10 @@
           "POLICE text"
         ],
         "typical_colors": [
-          "with",
-          "police",
-          "markings",
-          "and",
-          "emergency",
-          "lights"
+          "white",
+          "black",
+          "blue",
+          "with reflective/checkered markings"
         ],
         "border_color": [
           "varied"
@@ -4337,12 +4332,9 @@
           "yellow or orange"
         ],
         "typical_colors": [
-          "truck",
-          "with",
-          "crane",
-          "or",
-          "towing",
-          "apparatus"
+          "yellow",
+          "orange",
+          "red"
         ],
         "border_color": [
           "varied"
@@ -4489,12 +4481,12 @@
           "long articulated body"
         ],
         "typical_colors": [
-          "long",
-          "rail",
-          "vehicle",
-          "on",
-          "street",
-          "tracks"
+          "yellow",
+          "white",
+          "red",
+          "blue",
+          "green",
+          "operator-livery colours"
         ],
         "border_color": [
           "varied"
@@ -5107,13 +5099,9 @@
           "wooden frame"
         ],
         "typical_colors": [
-          "wooden",
-          "cart",
-          "pulled",
-          "by",
-          "ox",
-          "or",
-          "bullock"
+          "brown",
+          "natural wood tone",
+          "varied paint"
         ],
         "border_color": [
           "varied"
@@ -5260,11 +5248,10 @@
           "TAXI text"
         ],
         "typical_colors": [
-          "distinctive",
-          "colored",
-          "with",
-          "taxi",
-          "markings"
+          "yellow (NYC)",
+          "black (London)",
+          "white",
+          "varied by city/operator"
         ],
         "border_color": [
           "varied"
@@ -5412,13 +5399,7 @@
           "canopy"
         ],
         "typical_colors": [
-          "pickup",
-          "truck",
-          "with",
-          "benches",
-          "in",
-          "rear",
-          "bed"
+          "red"
         ],
         "border_color": [
           "varied"
@@ -5727,13 +5708,7 @@
           "tall roof"
         ],
         "typical_colors": [
-          "tall",
-          "black",
-          "taxi",
-          "with",
-          "distinctive",
-          "rounded",
-          "roof"
+          "black"
         ],
         "border_color": [
           "varied"
@@ -6184,12 +6159,9 @@
           "minibus size"
         ],
         "typical_colors": [
-          "decorated",
-          "minibus",
-          "with",
-          "unique",
-          "livery",
-          "art"
+          "varied",
+          "brightly painted",
+          "graffiti-art livery"
         ],
         "border_color": [
           "varied"
@@ -6336,9 +6308,8 @@
           "commercial rider"
         ],
         "typical_colors": [
-          "motorcycle",
-          "with",
-          "pillion"
+          "varied",
+          "black (helmet/motorcycle)"
         ],
         "border_color": [
           "varied"
@@ -6788,12 +6759,8 @@
           "round headlights"
         ],
         "typical_colors": [
-          "old",
-          "open-top",
-          "boxy",
-          "jeep",
-          "with",
-          "origins"
+          "olive drab",
+          "varied repaint colours"
         ],
         "border_color": [
           "varied"
@@ -6940,11 +6907,7 @@
         ],
         "typical_colors": [
           "yellow",
-          "faded",
-          "minibus",
-          "with",
-          "rusty",
-          "panels"
+          "black (stripe/trim)"
         ],
         "border_color": [
           "varied"
@@ -7392,13 +7355,10 @@
           "warning signs"
         ],
         "typical_colors": [
-          "very",
-          "long",
-          "truck",
-          "with",
-          "multiple",
-          "trailer",
-          "units"
+          "white",
+          "red",
+          "silver",
+          "operator livery"
         ],
         "border_color": [
           "varied"
@@ -7544,13 +7504,8 @@
           "vivid painted art"
         ],
         "typical_colors": [
-          "old",
-          "school",
-          "bus",
-          "with",
-          "colourful",
-          "street",
-          "art"
+          "multicolour",
+          "vivid mural/airbrush artwork"
         ],
         "border_color": [
           "varied"
@@ -7849,12 +7804,8 @@
           "goods on roof"
         ],
         "typical_colors": [
-          "colourful",
-          "wooden",
-          "bus",
-          "with",
-          "open",
-          "sides"
+          "multicolour",
+          "painted wood panels"
         ],
         "border_color": [
           "varied"
@@ -8150,11 +8101,8 @@
           "three wheels"
         ],
         "typical_colors": [
-          "pedal",
-          "three-wheeled",
-          "vehicle",
-          "with",
-          "front"
+          "varied",
+          "brightly painted"
         ],
         "border_color": [
           "varied"
@@ -8302,11 +8250,8 @@
           "canopy"
         ],
         "typical_colors": [
-          "cyclo",
-          "with",
-          "seat",
-          "at",
-          "front"
+          "varied",
+          "black frame"
         ],
         "border_color": [
           "varied"
@@ -8756,10 +8701,8 @@
           "open sides"
         ],
         "typical_colors": [
-          "motorcycle",
-          "with",
-          "extended",
-          "area"
+          "varied",
+          "colourful canopy"
         ],
         "border_color": [
           "varied"
@@ -9205,10 +9148,8 @@
           "passengers in sidecar"
         ],
         "typical_colors": [
-          "motorcycle",
-          "with",
-          "attached",
-          "sidecar"
+          "varied",
+          "colourful sidecar panels"
         ],
         "border_color": [
           "varied"
@@ -9355,11 +9296,7 @@
           "no safety equipment"
         ],
         "typical_colors": [
-          "motorcycle",
-          "overloaded",
-          "with",
-          "multiple",
-          "passengers"
+          "varied"
         ],
         "border_color": [
           "varied"
@@ -9497,7 +9434,7 @@
       "traffic_standard": null,
       "super_category": "vehicle",
       "parent_category": "vehicle",
-      "description": "Official Qatar maroon and white taxi",
+      "description": "Qatar's official Karwa taxi (operated by Mowasalat and franchise partners): turquoise body colour, with roof colour varying by operator (e.g. light grey for state-run Mowasalat vehicles, maroon for the Al Million franchise, blue for Al Ijarah, yellow/grey for other franchisees).",
       "purpose": "Annotate Karwa Taxi for traffic scene understanding",
       "visual_attributes": {
         "typical_shapes": [
@@ -9506,13 +9443,11 @@
           "sedan shape"
         ],
         "typical_colors": [
-          "maroon",
-          "and",
-          "white",
-          "sedan",
-          "with",
-          "karwa",
-          "branding"
+          "turquoise (body)",
+          "light grey (Mowasalat roof)",
+          "maroon (Al Million roof)",
+          "blue (Al Ijarah roof)",
+          "varies by franchise"
         ],
         "border_color": [
           "varied"
@@ -9810,12 +9745,10 @@
           "very common South Africa"
         ],
         "typical_colors": [
-          "pickup",
-          "truck",
-          "dominant",
-          "in",
-          "south",
-          "africa"
+          "white",
+          "silver",
+          "black",
+          "varied"
         ],
         "border_color": [
           "varied"
@@ -9961,13 +9894,9 @@
           "handwritten route on windscreen"
         ],
         "typical_colors": [
-          "old",
-          "minibus",
-          "with",
-          "route",
-          "numbers",
-          "on",
-          "windscreen"
+          "white",
+          "green",
+          "varied faded paint"
         ],
         "border_color": [
           "varied"
@@ -10105,7 +10034,7 @@
       "traffic_standard": "Vienna Convention, MUTCD",
       "super_category": "traffic_sign",
       "parent_category": "traffic_sign",
-      "description": "Red octagonal sign with white border and white \"STOP\" text.",
+      "description": "Red octagonal sign with white border and white \"STOP\" text. Used in the USA, Vienna Convention signatory countries, and most of the world. NOTE: Japan uses a different design (inverted red triangle) - see stop_sign_jp.",
       "purpose": "Detect and classify stop sign for compliance and safety systems",
       "visual_attributes": {
         "typical_shapes": [
@@ -10192,7 +10121,9 @@
       "relationships": {
         "parent": "traffic_sign",
         "children": [],
-        "related_classes": [],
+        "related_classes": [
+          "stop_sign_jp"
+        ],
         "common_confusions": [
           {
             "class": "give_way_line",
@@ -10203,6 +10134,11 @@
             "class": "no_entry_sign",
             "reason_for_confusion": "both are red circular or octagonal signs",
             "distinguishing_feature": "stop sign is a red octagon; no_entry sign is a red circle with white bar"
+          },
+          {
+            "class": "stop_sign_jp",
+            "reason_for_confusion": "Both are red 'STOP' regulatory signs at intersections",
+            "distinguishing_feature": "stop_sign is an octagon (8-sided); stop_sign_jp is an inverted triangle. Never assume octagon shape in Japan."
           }
         ]
       },
@@ -10835,11 +10771,11 @@
     {
       "class_id": "C005",
       "class_name": "speed_limit_sign",
-      "country": "Global",
+      "country": "Global (Vienna Convention style - Europe, most of Asia, Africa, Latin America, Middle East)",
       "traffic_standard": "Vienna Convention, MUTCD",
       "super_category": "traffic_sign",
       "parent_category": "traffic_sign",
-      "description": "Red circular sign with a white center and black speed limit numeral.",
+      "description": "Red circular sign with a white center and black speed limit numeral (Vienna Convention design, used across most of the world). NOTE: the United States (a non-Vienna-Convention country) uses a visually distinct design - white rectangular sign, black border, black text reading 'SPEED LIMIT' above the numeral (MUTCD sign R2-1) - with no red circle. No ontology class currently covers the US variant; flagged for a possible new class (see audit note).",
       "purpose": "Detect and classify speed limit sign for compliance and safety systems",
       "visual_attributes": {
         "typical_shapes": [
@@ -10938,6 +10874,11 @@
             "class": "end_speed_limit_sign",
             "reason_for_confusion": "both are white circles with numbers",
             "distinguishing_feature": "end speed limit has a diagonal strikethrough line over the number"
+          },
+          {
+            "class": "MISSING: us_speed_limit_sign (not yet in ontology)",
+            "reason_for_confusion": "Both regulate maximum speed",
+            "distinguishing_feature": "US sign is a white rectangle with black text/border, no red circle - visually opposite of the Vienna Convention circular red-bordered design"
           }
         ]
       },
@@ -20954,16 +20895,17 @@
       "class_id": "C063",
       "class_name": "priority_road_sign",
       "country": "Germany, Europe",
-      "traffic_standard": "StVO",
+      "traffic_standard": "StVO Zeichen 306",
       "super_category": "traffic_sign",
       "parent_category": "traffic_sign",
-      "description": "Yellow diamond granting priority right of way",
+      "description": "German 'Vorfahrtstrasse' (priority road) sign, StVO Verkehrszeichen 306: a white square (mounted point-up, diamond orientation) with a smaller yellow square (also point-up) centered inside - colloquially 'Spiegelei' (fried egg). Grants priority right of way until sign 307 or a yield sign is reached. NOTE: duplicate concept of I013 priority_road_sign_de - recommend merging.",
       "purpose": "Detect and classify priority road sign for compliance and safety systems",
       "visual_attributes": {
         "typical_shapes": [
-          "diamond"
+          "square mounted point-up (diamond orientation), nested white outer square with smaller yellow inner square"
         ],
         "typical_colors": [
+          "white",
           "yellow"
         ],
         "border_color": [
@@ -23032,7 +22974,7 @@
       "traffic_standard": "Korean Road Act",
       "super_category": "traffic_sign",
       "parent_category": "traffic_sign",
-      "description": "Korean Eullini child safety zone sign",
+      "description": "Korean school/child protection zone sign - '어린이보호구역' (Eorini Boho Guyeok, \"Child Protection Zone\"), designated under Korea's Road Traffic Act around schools/kindergartens/daycares. Typically a yellow-background sign with a child pictogram.",
       "purpose": "Detect and classify school zone sign kr for compliance and safety systems",
       "visual_attributes": {
         "typical_shapes": [
@@ -23067,7 +23009,7 @@
       },
       "text_information": {
         "common_text": [
-          "어린이"
+          "어린이보호구역"
         ],
         "languages": [
           "English",
@@ -26475,12 +26417,12 @@
     },
     {
       "class_id": "C095",
-      "class_name": "bilingual_road_sign",
-      "country": "Canada",
+      "class_name": "bilingual_road_sign_nb",
+      "country": "Canada (New Brunswick; also federal-jurisdiction signage nationwide)",
       "traffic_standard": "TAC",
       "super_category": "traffic_sign",
       "parent_category": "traffic_sign",
-      "description": "Signs in English and French for Quebec",
+      "description": "Bilingual English/French road sign. New Brunswick is Canada's only officially bilingual province and uses English/French signage throughout; federally-run signage (national parks, some federal highways) is also bilingual nationwide. NOTE: Quebec is the opposite case - its Charter of the French Language mandates French-ONLY road signage (English is legally restricted); Quebec signs should not be described as bilingual.",
       "purpose": "Detect and classify bilingual road sign for compliance and safety systems",
       "visual_attributes": {
         "typical_shapes": [
@@ -27500,189 +27442,169 @@
       "grounding_prompt": "red and white striped pole marker"
     },
     {
-        "class_id": "D001",
-        "class_name": "traffic_light_3_phase",
-        "country": "Global",
-        "traffic_standard": null,
-        "super_category": "traffic_signal",
-        "parent_category": "traffic_signal",
-
-        "description": "Three-lens vehicle traffic signal whose active signal state cannot be reliably determined.",
-
-        "purpose": "Represent a three-lens traffic signal when its signal state is not visually detectable.",
-
-        "visual_attributes": {
-            "typical_shapes": [
-            "vertical signal head",
-            "rectangular signal housing"
-            ],
-            "typical_colors": [
-            "red",
-            "amber",
-            "yellow",
-            "green",
-            "black"
-            ],
-            "border_color": [
-            "varied"
-            ],
-            "background_color": [
-            "black",
-            "dark housing"
-            ],
-            "text_color": [],
-            "material": [
-            "metal housing",
-            "polycarbonate lens",
-            "aluminum housing"
-            ],
-            "reflective": null,
-
-            "visual_characteristics": [
-            "three visible signal lenses or positions arranged as a traffic signal head",
-            "three-lens structure is visually identifiable",
-            "active signal state is not reliably distinguishable"
-            ]
-        },
-
-        "text_information": {
-            "common_text": [],
-            "languages": [],
-            "common_symbols": [
-            "traffic light",
-            "traffic signal",
-            "three-lens signal"
-            ]
-        },
-
-        "installation": {
-            "mounted_on": [
-            "traffic signal pole",
-            "gantry",
-            "overhead signal support"
-            ],
-            "orientation": "typically vertical",
-            "typical_height": "unknown"
-        },
-
-        "context": {
-            "typical_location": [
-            "intersection",
-            "junction",
-            "crosswalk",
-            "roadside"
-            ],
-            "road_types": [
-            "urban",
-            "highway",
-            "rural"
-            ],
-            "urban_rural": [
-            "urban",
-            "suburban",
-            "rural"
-            ],
-            "frequently_nearby_objects": [
-            "stop_line",
-            "crosswalk",
-            "pedestrian",
-            "car",
-            "lane_divider_broken",
-            "traffic_island"
-            ]
-        },
-
-        "relationships": {
-            "parent": "traffic_signal",
-            "children": [],
-            "related_classes": [],
-
-            "common_confusions": [
-            {
-                "class": "traffic_light_2_phase",
-                "reason_for_confusion": "Both are traffic signal heads, but the number of visible lens positions differs.",
-                "distinguishing_feature": "D001 requires three visible lens positions."
-            },
-            {
-                "class": "flashing_beacon",
-                "reason_for_confusion": "Both may show an illuminated coloured light.",
-                "distinguishing_feature": "D001 requires a three-lens traffic signal head."
-            },
-            {
-                "class": "traffic_signal",
-                "reason_for_confusion": "A generic traffic signal may be visible without enough information to determine its configuration.",
-                "distinguishing_feature": "D001 requires three visible lens positions."
-            }
-            ]
-        },
-
-        "semantic_information": {
-            "keywords": [
-            "three lens traffic light",
-            "three lens traffic signal",
-            "three aspect signal",
-            "traffic signal state unreadable",
-            "traffic signal state unknown",
-            "traffic signal state not visible"
-            ],
-
-            "synonyms": [
-            "three-lens traffic light",
-            "three-aspect traffic signal",
-            "three-phase traffic light"
-            ],
-
-            "aliases": [
-            "traffic_light_3_phase",
-            "three-lens signal",
-            "three-aspect signal"
-            ]
-    },
-
-    "inference_cues": {
-        "likely_descriptions": [
-        "Traffic signal with three visible lenses but the active state cannot be determined",
-        "Three-lens traffic signal with unreadable signal state",
-        "Three-position traffic signal where illumination state is unclear",
-        "Three visible signal heads with glare or distance preventing state identification",
-        "Traffic signal with red, amber and green positions visible but no reliable active state"
+      "class_id": "D001",
+      "class_name": "traffic_light_3_phase",
+      "country": "Global",
+      "traffic_standard": null,
+      "super_category": "traffic_signal",
+      "parent_category": "traffic_signal",
+      "description": "Three-lens vehicle traffic signal whose active signal state cannot be reliably determined.",
+      "purpose": "Represent a three-lens traffic signal when its signal state is not visually detectable.",
+      "visual_attributes": {
+        "typical_shapes": [
+          "vertical signal head",
+          "rectangular signal housing"
+        ],
+        "typical_colors": [
+          "red",
+          "amber",
+          "yellow",
+          "green",
+          "black"
+        ],
+        "border_color": [
+          "varied"
+        ],
+        "background_color": [
+          "black",
+          "dark housing"
+        ],
+        "text_color": [],
+        "material": [
+          "metal housing",
+          "polycarbonate lens",
+          "aluminum housing"
+        ],
+        "reflective": null,
+        "visual_characteristics": [
+          "three visible signal lenses or positions arranged as a traffic signal head",
+          "three-lens structure is visually identifiable",
+          "active signal state is not reliably distinguishable"
         ]
-    },
-
-    "example_images": [],
-
-    "sources": {
+      },
+      "text_information": {
+        "common_text": [],
+        "languages": [],
+        "common_symbols": [
+          "traffic light",
+          "traffic signal",
+          "three-lens signal"
+        ]
+      },
+      "installation": {
+        "mounted_on": [
+          "traffic signal pole",
+          "gantry",
+          "overhead signal support"
+        ],
+        "orientation": "typically vertical",
+        "typical_height": "unknown"
+      },
+      "context": {
+        "typical_location": [
+          "intersection",
+          "junction",
+          "crosswalk",
+          "roadside"
+        ],
+        "road_types": [
+          "urban",
+          "highway",
+          "rural"
+        ],
+        "urban_rural": [
+          "urban",
+          "suburban",
+          "rural"
+        ],
+        "frequently_nearby_objects": [
+          "stop_line",
+          "crosswalk",
+          "pedestrian",
+          "car",
+          "lane_divider_broken",
+          "traffic_island"
+        ]
+      },
+      "relationships": {
+        "parent": "traffic_signal",
+        "children": [],
+        "related_classes": [],
+        "common_confusions": [
+          {
+            "class": "traffic_light_2_phase",
+            "reason_for_confusion": "Both are traffic signal heads, but the number of visible lens positions differs.",
+            "distinguishing_feature": "D001 requires three visible lens positions."
+          },
+          {
+            "class": "flashing_beacon",
+            "reason_for_confusion": "Both may show an illuminated coloured light.",
+            "distinguishing_feature": "D001 requires a three-lens traffic signal head."
+          },
+          {
+            "class": "traffic_signal",
+            "reason_for_confusion": "A generic traffic signal may be visible without enough information to determine its configuration.",
+            "distinguishing_feature": "D001 requires three visible lens positions."
+          }
+        ]
+      },
+      "semantic_information": {
+        "keywords": [
+          "three lens traffic light",
+          "three lens traffic signal",
+          "three aspect signal",
+          "traffic signal state unreadable",
+          "traffic signal state unknown",
+          "traffic signal state not visible"
+        ],
+        "synonyms": [
+          "three-lens traffic light",
+          "three-aspect traffic signal",
+          "three-phase traffic light"
+        ],
+        "aliases": [
+          "traffic_light_3_phase",
+          "three-lens signal",
+          "three-aspect signal"
+        ]
+      },
+      "inference_cues": {
+        "likely_descriptions": [
+          "Traffic signal with three visible lenses but the active state cannot be determined",
+          "Three-lens traffic signal with unreadable signal state",
+          "Three-position traffic signal where illumination state is unclear",
+          "Three visible signal heads with glare or distance preventing state identification",
+          "Traffic signal with red, amber and green positions visible but no reliable active state"
+        ]
+      },
+      "example_images": [],
+      "sources": {
         "from_taxonomy": [
-        "Category D - Traffic Signals"
+          "Category D - Traffic Signals"
         ],
         "inferred": [],
         "traffic_standard": "Global"
-    },
-
-    "object_type": "traffic_signal",
-
-    "embedding_text": "A three-lens traffic signal whose active signal state cannot be reliably determined. The signal has three visible lens positions in a traffic signal housing. The three-lens structure must be visually identifiable, while the active state may be unreadable because of distance, glare, blur, occlusion or image quality. Do not use this class when the signal has fewer than three visible lens positions or when a different signal configuration is clearly identifiable. This class represents signal configuration plus unknown or unreadable active state.",
-
-    "distinctive_features": [
+      },
+      "object_type": "traffic_signal",
+      "embedding_text": "A three-lens traffic signal whose active signal state cannot be reliably determined. The signal has three visible lens positions in a traffic signal housing. The three-lens structure must be visually identifiable, while the active state may be unreadable because of distance, glare, blur, occlusion or image quality. Do not use this class when the signal has fewer than three visible lens positions or when a different signal configuration is clearly identifiable. This class represents signal configuration plus unknown or unreadable active state.",
+      "distinctive_features": [
         "Three visible signal lens positions",
         "Traffic signal housing",
         "Active signal state cannot be reliably determined"
-    ],
-
-    "common_confusions": [
+      ],
+      "common_confusions": [
         {
-        "class": "traffic_light_2_phase",
-        "reason_for_confusion": "Both are traffic signal heads.",
-        "distinguishing_feature": "D001 requires three visible lens positions."
+          "class": "traffic_light_2_phase",
+          "reason_for_confusion": "Both are traffic signal heads.",
+          "distinguishing_feature": "D001 requires three visible lens positions."
         },
         {
-        "class": "flashing_beacon",
-        "reason_for_confusion": "Both may contain illuminated coloured lights.",
-        "distinguishing_feature": "D001 requires a three-lens signal head rather than a single flashing beacon."
+          "class": "flashing_beacon",
+          "reason_for_confusion": "Both may contain illuminated coloured lights.",
+          "distinguishing_feature": "D001 requires a three-lens signal head rather than a single flashing beacon."
         }
-    ],
-
-    "negative_cues": [
+      ],
+      "negative_cues": [
         "Only one or two lens positions are visible",
         "Signal configuration cannot be determined",
         "Active signal state is clearly visible and another state-specific class is applicable",
@@ -27692,35 +27614,32 @@
         "Bicycle signal",
         "Static reflective sign",
         "No traffic signal housing or lens structure visible"
-    ],
-
-    "attribute_importance": {
+      ],
+      "attribute_importance": {
         "shape": 5,
         "color": 4,
         "text": 0,
         "symbol": 2,
         "context": 3,
         "location": 2
-    },
-
-    "detection_priority": [
+      },
+      "detection_priority": [
         "number_of_visible_lens_positions",
         "signal_head_structure",
         "ability_to_determine_active_signal_state",
         "housing_shape",
         "mounting"
-    ],
-
-    "grounding_prompt": "traffic light"
+      ],
+      "grounding_prompt": "traffic light"
     },
     {
       "class_id": "D002",
       "class_name": "traffic_light_2_phase",
-      "country": "Developing Countries",
+      "country": "Global (older or simplified signal installations)",
       "traffic_standard": null,
       "super_category": "traffic_signal",
       "parent_category": "traffic_signal",
-      "description": "Red-green vehicle signal without amber phase",
+      "description": "Red-green vehicle signal without an amber/yellow phase - found on some older or simplified signal installations worldwide, not specific to any country's regulatory standard.",
       "purpose": "Detect traffic light 2 phase for intersection and junction control understanding",
       "visual_attributes": {
         "typical_shapes": [
@@ -30504,11 +30423,11 @@
     {
       "class_id": "E007",
       "class_name": "no_passing_marking",
-      "country": "USA, Canada, Australia",
+      "country": "USA, Canada, New Zealand",
       "traffic_standard": null,
       "super_category": "road_marking",
       "parent_category": "road_marking",
-      "description": "Double solid yellow centre line prohibiting overtaking",
+      "description": "Double solid yellow centre line prohibiting overtaking (USA, Canada, New Zealand - NZTA's Traffic Control Devices manual specifies a continuous yellow no-passing line). NOTE: Australia uses a visually different convention - double solid WHITE lines for no-overtaking, not yellow - so Australia has been removed from this class; a separate white-line variant would be needed to represent it accurately.",
       "purpose": "Detect no passing marking road marking for lane analysis and safety systems",
       "visual_attributes": {
         "typical_shapes": [
@@ -38335,16 +38254,17 @@
       "traffic_standard": null,
       "super_category": "country_specific",
       "parent_category": "country_specific",
-      "description": "East German pedestrian signal figure (Ampelmann)",
+      "description": "East German-style pedestrian signal figure (Ampelmannchen), designed 1961 by Karl Peglau: a stocky figure wearing a broad hat. Red phase ('Steher') shows the figure standing with arms stretched wide; green phase ('Geher') shows the figure striding forward. Found mainly on secondary/municipal streets in the former East Germany (Berlin and other eastern cities), not standardized nationwide.",
       "purpose": "Detect ampelmann signal for country-specific traffic scene understanding",
       "visual_attributes": {
         "typical_shapes": [
           "distinctive figure on signal"
         ],
         "typical_colors": [
-          "green",
           "red",
-          "black"
+          "green",
+          "black silhouette",
+          "yellow/white hat outline"
         ],
         "border_color": [
           "varied"
@@ -39493,14 +39413,14 @@
       "traffic_standard": null,
       "super_category": "country_specific",
       "parent_category": "country_specific",
-      "description": "Orange flashing globe on pole marking zebra crossing",
+      "description": "Amber (yellow) flashing globe lamp atop a black-and-white striped pole, marking a zebra crossing in the UK; a legal requirement at every zebra crossing under UK regulations.",
       "purpose": "Detect belisha beacon for country-specific traffic scene understanding",
       "visual_attributes": {
         "typical_shapes": [
-          "orange globe on black-white pole"
+          "spherical globe lamp on striped pole"
         ],
         "typical_colors": [
-          "orange",
+          "amber",
           "black",
           "white"
         ],
@@ -39508,7 +39428,7 @@
           "varied"
         ],
         "background_color": [
-          "varied"
+          "black and white striped pole"
         ],
         "text_color": [
           "varied"
@@ -39994,28 +39914,25 @@
     {
       "class_id": "I013",
       "class_name": "priority_road_sign_de",
-      "country": "Germany, Europe",
-      "traffic_standard": null,
+      "country": "Germany",
+      "traffic_standard": "StVO Zeichen 306",
       "super_category": "country_specific",
       "parent_category": "country_specific",
-      "description": "Yellow diamond priority road sign",
+      "description": "German 'Vorfahrtstraße' (priority road) sign, StVO Verkehrszeichen 306: a white square (mounted diamond/point-up) with a smaller yellow square (also point-up) centered inside it - nicknamed 'Spiegelei' (fried egg). Indicates priority continues until sign 307 (end of priority road), or signs 205/206.",
       "purpose": "Detect priority road sign de for country-specific traffic scene understanding",
       "visual_attributes": {
         "typical_shapes": [
-          "yellow diamond shape",
-          "diamond",
-          "diamond-shaped",
-          "rhombus",
-          "rotated square"
+          "square mounted point-up (diamond orientation), nested white outer square with smaller yellow inner square"
         ],
         "typical_colors": [
+          "white",
           "yellow"
         ],
         "border_color": [
-          "varied"
+          "white outer edge"
         ],
         "background_color": [
-          "varied"
+          "white"
         ],
         "text_color": [
           "varied"
@@ -49175,7 +49092,7 @@
       "traffic_standard": "Vienna Convention",
       "super_category": "traffic_sign",
       "parent_category": "Warning Sign",
-      "description": "White triangular sign with a red border and downward slope with a black ferry boat symbol on water indicating ferry crossing.",
+      "description": "White triangular sign with a red border and a black ferry boat symbol on water, indicating a ferry crossing ahead.",
       "purpose": "Detect and classify ferry warning sign for traffic scene annotation",
       "visual_attributes": {
         "typical_shapes": [
@@ -49205,7 +49122,7 @@
         ],
         "reflective": true,
         "visual_characteristics": [
-          "ferry warning sign — White triangular sign with a red border and downward slope with a black ferry boat symbol on water indicating ferry crossing."
+          "ferry warning sign - white triangular sign with a red border and a black ferry boat symbol on water, indicating a ferry crossing ahead."
         ]
       },
       "text_information": {
@@ -66838,16 +66755,11 @@
       "traffic_standard": "Vienna Convention Cuba",
       "super_category": "traffic_sign",
       "parent_category": "Regulatory Sign",
-      "description": "Red circular regulatory sign displaying an inverted yield triangle with the text \"PARE\" (Stop).",
+      "description": "Red octagonal stop sign with white border displaying white 'PARE' text (Cuba conforms to the Vienna Convention on Road Signs and Signals, which specifies the octagonal stop-sign shape). PREVIOUS ontology description ('red circular sign displaying an inverted yield triangle') appears to be an error/conflation and could not be confirmed against an authoritative image - flagged for manual review if a Cuban government source becomes available.",
       "purpose": "Detect and classify stop sign cu for traffic scene annotation",
       "visual_attributes": {
         "typical_shapes": [
-          "circle",
-          "inverted triangle",
-          "triangle",
-          "triangular",
-          "three-sided",
-          "delta-shaped"
+          "octagon"
         ],
         "typical_colors": [
           "red",
@@ -68961,5 +68873,5 @@
       "grounding_prompt": "kangaroo on road"
     }
   ],
-  "upgrade_notes": "Version 2.1: Updated from expanded taxonomy Markdown. Added 167 new classes. Updated descriptions for stop_sign, yield_sign, speed_limit_sign, end_speed_limit_sign, guardrail, streetlight, delineator_post. Added traffic signal aspect classes (D012-D039), new road markings (E018-E031), new infrastructure (F016-F027), and country-specific signs/vehicles (I021-I085). | v2.1 enrichment pass: expanded shapes, normalized colors, expanded materials, enriched synonyms/aliases/keywords, rebuilt inference_cues, rebuilt embedding_text for all 412 classes using VLM-compatible natural language."
+  "upgrade_notes": "Version 2.1: Updated from expanded taxonomy Markdown. Added 167 new classes. Updated descriptions for stop_sign, yield_sign, speed_limit_sign, end_speed_limit_sign, guardrail, streetlight, delineator_post. Added traffic signal aspect classes (D012-D039), new road markings (E018-E031), new infrastructure (F016-F027), and country-specific signs/vehicles (I021-I085). | v2.1 enrichment pass: expanded shapes, normalized colors, expanded materials, enriched synonyms/aliases/keywords, rebuilt inference_cues, rebuilt embedding_text for all 412 classes using VLM-compatible natural language. | v2.2 fact-check audit pass: reviewed all 413 classes against authoritative sources where available; 44 corrections applied (visual, factual, terminology, semantic-scope, and data-integrity fixes); 4 duplicate class pairs flagged for merge (I001/I078, I013/C063, F009/F019, H001/I084); 2 missing-class gaps flagged (no US-style speed-limit-sign class; taxi/london_black_cab overlap); 1 entry flagged for manual review pending a primary source (Cuba stop sign). See accompanying audit report for full detail and per-class evidence/confidence."
 }

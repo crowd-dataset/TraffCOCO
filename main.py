@@ -2538,6 +2538,25 @@ def _run_semantic_gemma(
     object_id = detection.get("object_id")
     recovered_scene_object["object_id"] = object_id
 
+    raw_confidence = recovered_scene_object.get("confidence")
+    if raw_confidence is None:
+        raw_confidence = recovered_scene_object.get("confidenc_score")
+
+    try:
+        scene_confidence = (
+            float(raw_confidence)
+            if raw_confidence is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        scene_confidence = None
+
+    if scene_confidence is not None:
+        scene_confidence = max(0.0, min(1.0, scene_confidence))
+
+    recovered_scene_object["scene_confidence"] = scene_confidence
+    recovered_scene_object.pop("confidenc_score", None)
+
     if not is_none_target:
         recovered_scene_object["object_group"] = "traffic_sign"
     else:
@@ -2646,7 +2665,15 @@ def _apply_semantic_ontology(
     detection["class_name"] = recovered_class
     detection["final_label"] = recovered_class
     detection["grounding_prompt"] = prediction.get("grounding_prompt")
-    detection["score"] = prediction.get("score", 0.0)
+    detection["ontology_score"] = prediction.get(
+        "ontology_score",
+        prediction.get("score"),
+    )
+    detection["scene_confidence"] = scene_object.get(
+        "scene_confidence",
+        scene_object.get("confidence"),
+    )
+    detection["grounding_confidence"] = None
 
     if scene_object.get("object_group"):
         detection["object_group"] = scene_object["object_group"]
@@ -3235,6 +3262,71 @@ def _overlay_binary_mask(
         return base
 
 
+def _final_display_label(detection: dict) -> str:
+    """Return the label used in the final visualization."""
+    raw = (
+        detection.get("class_name")
+        or detection.get("final_label")
+        or detection.get("observed_object")
+        or detection.get("object_name")
+        or ""
+    )
+    label = str(raw).strip()
+    normalized = label.lower().replace("_", " ").strip()
+
+    # In the final image, "truck N/A" means the label is "truck" while its
+    # confidence is unavailable. Rename unresolved generic vehicles only.
+    specialized_vehicles = {
+        "police car",
+        "taxi",
+        "ambulance",
+        "fire truck",
+        "tow truck",
+        "service vehicle",
+        "delivery vehicle",
+    }
+    generic_vehicle_labels = {
+        "car",
+        "truck",
+        "bus",
+        "van",
+        "vehicle",
+        "motorcycle",
+        "train",
+    }
+
+    confidence_values = (
+        detection.get("scene_confidence"),
+        detection.get("yolopv2_confidence"),
+    )
+    has_confidence = any(
+        value is not None
+        and str(value).strip().lower() not in {"", "n/a", "na"}
+        for value in confidence_values
+    )
+
+    object_group = str(detection.get("object_group", "")).lower().strip()
+
+    if (
+        normalized not in specialized_vehicles
+        and not has_confidence
+        and (
+            object_group == "vehicle"
+            or normalized in generic_vehicle_labels
+        )
+    ):
+        return "unidentified vehicle"
+
+    if re.search(r"\bn/?a\b", label, flags=re.IGNORECASE):
+        return "unidentified vehicle"
+
+    if normalized in {"unknown vehicle", "unidentified", "unidentified vehicle"}:
+        return "unidentified vehicle"
+
+    return label or "unidentified vehicle"
+
+
+
 def _draw_final_detections(
     base: Image.Image,
     detections: list[dict[str, Any]],
@@ -3256,25 +3348,27 @@ def _draw_final_detections(
         except (TypeError, ValueError):
             continue
 
-        label = (
-            detection.get("class_name")
-            or detection.get("final_label")
-            or detection.get("observed_object")
-            or detection.get("grounding_prompt")
-            or detection.get("source")
-            or "object"
-        )
+        label = _final_display_label(detection)
 
-        try:
-            score = float(detection.get("score", 0.0))
-        except (TypeError, ValueError):
-            score = 0.0
+        source = str(detection.get("source", "")).lower()
 
-        text_label = f"{label} {score:.2f}"
+        if source == "yolopv2":
+            raw_confidence = detection.get("yolopv2_confidence")
+        else:
+            raw_confidence = detection.get("scene_confidence")
+
+        if raw_confidence is None:
+            confidence_text = "N/A"
+        else:
+            try:
+                confidence_text = f"{float(raw_confidence):.2f}"
+            except (TypeError, ValueError):
+                confidence_text = "N/A"
+
+        text_label = f"{label} {confidence_text}"
 
         # Keep YOLOPv2 and VLM/LA visually distinguishable while retaining
         # one unified final image.
-        source = str(detection.get("source", "")).lower()
         outline = (255, 80, 80, 255) if source == "yolopv2" else (80, 160, 255, 255)
 
         draw.rectangle(
@@ -4107,9 +4201,8 @@ def main() -> None:
     annotation_stage_start = time.perf_counter()
 
     final_detections_by_image: dict[str, list[dict[str, Any]]] = {}
-    # Independent auxiliary YOLOPv2 results. These bypass the LA
-    # annotation/postprocessing/semantic-verification branch.
-    yolopv2_detections_by_image: dict[str, list[dict[str, Any]]] = {}
+    # YOLOPv2 results are created immediately before annotation and must
+    # survive into the later fusion stage. Do not reinitialize this mapping.
 
     if config.pipeline.run_annotation:
 
