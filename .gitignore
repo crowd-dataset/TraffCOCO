@@ -217,6 +217,7 @@ videos
 
 #outputs
 outputs
+FINAL/
 
 #generated model files
 *.pkl

@@ -674,6 +674,104 @@ def _bbox_containment_ratio(
     return intersection_area / inner_area
 
 
+
+def _bbox_area_fraction(
+    bbox: list | tuple,
+    image_width: int,
+    image_height: int,
+) -> float:
+    """Return the fraction of the image occupied by a bounding box."""
+
+    if (
+        not isinstance(bbox, (list, tuple))
+        or len(bbox) != 4
+        or image_width <= 0
+        or image_height <= 0
+    ):
+        return 0.0
+
+    try:
+        x1, y1, x2, y2 = map(float, bbox)
+    except (TypeError, ValueError):
+        return 0.0
+
+    box_width = max(0.0, x2 - x1)
+    box_height = max(0.0, y2 - y1)
+    image_area = float(image_width * image_height)
+
+    if image_area <= 0:
+        return 0.0
+
+    return (box_width * box_height) / image_area
+
+
+def remove_excessively_large_detections(
+    image_path: Path,
+    detections: list[dict],
+    max_area_fraction: float = 0.50,
+) -> list[dict]:
+    """Remove any detection whose bbox occupies >=50% of the image area.
+
+    This rule applies to every class. Existing size/aspect-ratio filtering
+    remains unchanged and runs alongside this additional safeguard.
+    """
+
+    if not detections:
+        return detections
+
+    try:
+        with Image.open(image_path) as image:
+            image_width, image_height = image.size
+    except Exception as exc:
+        logger.warning(
+            "Could not determine image dimensions for oversized-box "
+            "cleanup of '{}': {}",
+            image_path.name,
+            exc,
+        )
+        return detections
+
+    filtered = []
+    removed = 0
+
+    for detection in detections:
+        if not isinstance(detection, dict):
+            filtered.append(detection)
+            continue
+
+        area_fraction = _bbox_area_fraction(
+            detection.get("bbox"),
+            image_width,
+            image_height,
+        )
+
+        if area_fraction >= max_area_fraction:
+            label = _normalise_detection_label(detection)
+
+            logger.warning(
+                "Postprocessing removed excessively large detection "
+                "'{}' from '{}': bbox occupies {:.2f}% of image area.",
+                label or "unknown",
+                image_path.name,
+                area_fraction * 100.0,
+            )
+            removed += 1
+            continue
+
+        filtered.append(detection)
+
+    if removed:
+        logger.info(
+            "Oversized-box cleanup for '{}': removed {} detection(s) "
+            "occupying >= {:.0f}% of the image area.",
+            image_path.name,
+            removed,
+            max_area_fraction * 100.0,
+        )
+
+    return filtered
+
+
 def remove_road_markings_inside_zebra_crossing(
     image_path: Path,
     detections: list[dict],
@@ -805,16 +903,15 @@ def remove_redundant_contained_detections(
     image_path: Path,
     detections: list[dict],
 ) -> list[dict]:
-    """Remove redundant detections fully contained by a larger same-class box.
+    """Remove smaller detections fully contained inside larger detections.
 
-    Two detections are candidates for suppression only when they belong to
-    the same superclass and the same semantic class. If one bbox is fully
-    contained inside the other, only the larger-area detection is retained.
-
-    This is intentionally stricter than arbitrary overlap suppression:
-    partial overlaps are preserved, and detections from different classes
-    are never removed by this rule.
+    This applies across ALL classes. A class/superclass match is not required.
+    Partial overlaps are preserved. When one valid bbox is completely inside
+    another and is smaller, the smaller detection is discarded.
     """
+
+    if len(detections) < 2:
+        return detections
 
     candidates = []
 
@@ -835,14 +932,9 @@ def remove_redundant_contained_detections(
         except (TypeError, ValueError):
             continue
 
-        width = abs(x2 - x1)
-        height = abs(y2 - y1)
-        area = width * height
+        area = abs(x2 - x1) * abs(y2 - y1)
 
-        superclass = _detection_superclass(detection)
-        class_name = _detection_class(detection)
-
-        if not superclass or not class_name or area <= 0:
+        if area <= 0:
             continue
 
         candidates.append(
@@ -850,53 +942,54 @@ def remove_redundant_contained_detections(
                 index,
                 detection,
                 area,
-                superclass,
-                class_name,
+                bbox,
             )
         )
 
-    # Largest boxes are considered first. This guarantees that when several
-    # nested detections exist, the outermost/largest valid detection survives.
+    # Largest boxes first. A smaller contained detection is therefore
+    # compared against the larger box before it can remove anything.
     candidates.sort(
         key=lambda item: item[2],
         reverse=True,
     )
 
-    remove_indices = set()
+    remove_indices: set[int] = set()
 
-    for outer_index, outer_detection, outer_area, outer_superclass, outer_class in candidates:
+    for outer_index, outer_detection, outer_area, outer_bbox in candidates:
         if outer_index in remove_indices:
             continue
 
-        outer_bbox = outer_detection.get("bbox")
-
-        for inner_index, inner_detection, inner_area, inner_superclass, inner_class in candidates:
-            if inner_index == outer_index or inner_index in remove_indices:
+        for inner_index, inner_detection, inner_area, inner_bbox in candidates:
+            if inner_index == outer_index:
                 continue
 
-            if outer_superclass != inner_superclass:
+            if inner_index in remove_indices:
                 continue
 
-            if outer_class != inner_class:
-                continue
-
-            # The outer candidate must actually be the larger box.
-            if outer_area <= inner_area:
+            # Only the smaller box is discarded.
+            if inner_area >= outer_area:
                 continue
 
             if _bbox_fully_inside(
-                inner_bbox=inner_detection.get("bbox"),
+                inner_bbox=inner_bbox,
                 outer_bbox=outer_bbox,
             ):
                 remove_indices.add(inner_index)
 
+                outer_label = _normalise_detection_label(
+                    outer_detection
+                )
+                inner_label = _normalise_detection_label(
+                    inner_detection
+                )
+
                 logger.warning(
-                    "Postprocessing removed redundant '{}' detection "
-                    "from '{}': bbox is fully contained inside the larger "
-                    "same-class '{}' detection.",
-                    inner_class,
+                    "Postprocessing removed smaller contained detection "
+                    "'{}' from '{}': its bbox is fully inside larger "
+                    "detection '{}'.",
+                    inner_label or "unknown",
                     image_path.name,
-                    outer_class,
+                    outer_label or "unknown",
                 )
 
     if not remove_indices:
@@ -910,7 +1003,7 @@ def remove_redundant_contained_detections(
 
     logger.info(
         "Redundant containment cleanup for '{}': removed {} "
-        "contained same-class detection(s).",
+        "smaller detection(s) fully contained inside larger boxes.",
         image_path.name,
         len(remove_indices),
     )
@@ -987,11 +1080,11 @@ def _is_vehicle_or_road_user(
     }
 
 
-def _bbox_fully_in_top_third(
+def _bbox_fully_in_top_40_percent(
     bbox: list | tuple,
     image_height: int,
 ) -> bool:
-    """Return True when the complete bbox lies in the image's top third."""
+    """Return True when the complete bbox lies within the top 40%."""
 
     if (
         not isinstance(bbox, (list, tuple))
@@ -1007,7 +1100,7 @@ def _bbox_fully_in_top_third(
 
     y1, y2 = sorted((y1, y2))
 
-    return y2 <= (image_height / 3.0)
+    return y2 <= (image_height * 0.40)
 
 
 def _bbox_overlaps_top_third(
@@ -1112,8 +1205,8 @@ def remove_top_third_detections(
     """Remove inappropriate road-related detections from the top third.
 
     Vehicles and road users are removed only when their COMPLETE bbox lies
-    in the top third. If a vehicle or road user crosses the top-third
-    boundary, it is retained because the object is only partially present
+    in the top 40% of the image. If a vehicle or road user crosses below the
+    40% boundary, it is retained because the object is only partially present
     there.
 
     Road markings and roadside/road-surface objects are removed whenever
@@ -1192,11 +1285,11 @@ def remove_top_third_detections(
 
         # --------------------------------------------------------------
         # Vehicles / road users:
-        # remove ONLY when the complete bbox is inside the top third.
-        # Partial objects crossing below the boundary are preserved.
+        # remove ONLY when the complete bbox is inside the top 40%.
+        # Partial objects crossing below the 40% boundary are preserved.
         # --------------------------------------------------------------
         if is_vehicle_or_user:
-            if not _bbox_fully_in_top_third(
+            if not _bbox_fully_in_top_40_percent(
                 bbox=bbox,
                 image_height=image_height,
             ):
@@ -1676,6 +1769,16 @@ def postprocess_detections(
         )
 
     # --------------------------------------------------------------
+    # UNIVERSAL OVERSIZED-BOX CLEANUP
+    # --------------------------------------------------------------
+    # Reject any class whose bbox occupies >=50% of the image.
+    filtered_detections = remove_excessively_large_detections(
+        image_path=image_path,
+        detections=filtered_detections,
+        max_area_fraction=0.50,
+    )
+
+    # --------------------------------------------------------------
     # ZEBRA-CROSSING ROAD-MARKING CLEANUP
     # --------------------------------------------------------------
     filtered_detections = remove_road_markings_inside_zebra_crossing(
@@ -1684,7 +1787,7 @@ def postprocess_detections(
     )
 
     # Remove road markings and fully-contained vehicles/road users from
-    # the top third of the image. Partial objects are preserved.
+    # the top-third/top-40% rules. Partial vehicle/road-user boxes are preserved.
     filtered_detections = remove_top_third_detections(
         image_path=image_path,
         detections=filtered_detections,
@@ -1698,8 +1801,8 @@ def postprocess_detections(
         min_aspect_ratio=min_aspect_ratio,
     )
 
-    # Generic redundancy rule: for the same superclass + same class,
-    # retain the larger bbox when the smaller bbox is fully contained.
+    # Universal containment rule: across ALL classes, retain the larger
+    # bbox when a smaller bbox is fully contained inside it.
     filtered_detections = remove_redundant_contained_detections(
         image_path=image_path,
         detections=filtered_detections,
@@ -3205,6 +3308,199 @@ def load_current_run_final_detections_for_sam(
     return recovered
 
 # ============================================================================
+# COCO DATASET EXPORT
+# ============================================================================
+
+def _coco_normalize_category_name(
+    detection: dict[str, Any],
+) -> str:
+    """Return the final semantic class name used for COCO categories."""
+
+    label = _normalise_detection_label(detection)
+
+    if not label:
+        label = "unidentified"
+
+    return re.sub(
+        r"\s+",
+        " ",
+        label.replace("_", " ").replace("-", " "),
+    ).strip()
+
+
+def _coco_bbox(
+    bbox: list | tuple,
+    image_width: int,
+    image_height: int,
+) -> tuple[list[float], float] | None:
+    """Convert xyxy detection coordinates to COCO xywh coordinates."""
+
+    if (
+        not isinstance(bbox, (list, tuple))
+        or len(bbox) != 4
+        or image_width <= 0
+        or image_height <= 0
+    ):
+        return None
+
+    try:
+        x1, y1, x2, y2 = map(float, bbox)
+    except (TypeError, ValueError):
+        return None
+
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+
+    # Clamp to the actual image dimensions so the exported COCO annotation
+    # never describes pixels outside its corresponding image.
+    x1 = max(0.0, min(x1, float(image_width)))
+    y1 = max(0.0, min(y1, float(image_height)))
+    x2 = max(0.0, min(x2, float(image_width)))
+    y2 = max(0.0, min(y2, float(image_height)))
+
+    width = x2 - x1
+    height = y2 - y1
+
+    if width <= 0.0 or height <= 0.0:
+        return None
+
+    return (
+        [
+            round(x1, 3),
+            round(y1, 3),
+            round(width, 3),
+            round(height, 3),
+        ],
+        width * height,
+    )
+
+
+def _coco_uncompressed_rle(
+    mask: np.ndarray,
+) -> dict[str, Any] | None:
+    """Encode a binary mask as valid COCO uncompressed RLE.
+
+    COCO RLE uses column-major (Fortran-order) traversal. Keeping the
+    implementation here avoids making the final dataset dependent on an
+    optional pycocotools installation.
+    """
+
+    if not isinstance(mask, np.ndarray) or mask.ndim != 2:
+        return None
+
+    binary = np.asarray(mask, dtype=np.uint8)
+    binary = (binary > 0).astype(np.uint8)
+
+    height, width = binary.shape
+
+    # COCO RLE starts with the number of zero-valued pixels.
+    flat = binary.T.reshape(-1)
+
+    counts: list[int] = []
+    current = 0
+    run_length = 0
+
+    for value in flat:
+        value = int(value)
+
+        if value == current:
+            run_length += 1
+        else:
+            counts.append(run_length)
+            run_length = 1
+            current = value
+
+    counts.append(run_length)
+
+    return {
+        "size": [int(height), int(width)],
+        "counts": counts,
+    }
+
+
+def _coco_segmentation_from_detection(
+    detection: dict[str, Any],
+    image_width: int,
+    image_height: int,
+) -> tuple[dict[str, Any] | None, int | None, float | None]:
+    """Load the SAM 2 mask attached to a final detection.
+
+    Returns:
+        COCO RLE segmentation, mask area in pixels, and SAM score.
+    """
+
+    segmentation = detection.get("segmentation")
+
+    if not isinstance(segmentation, dict):
+        return None, None, None
+
+    mask_path = segmentation.get("mask_path")
+
+    if not mask_path:
+        return None, None, None
+
+    try:
+        mask_path = Path(str(mask_path))
+    except Exception:
+        return None, None, None
+
+    if not mask_path.exists():
+        logger.warning(
+            "COCO export could not find SAM mask '{}'. "
+            "The annotation will remain bbox-only.",
+            mask_path,
+        )
+        return None, None, None
+
+    try:
+        with Image.open(mask_path) as mask_image:
+            mask = np.asarray(
+                mask_image.convert("L"),
+                dtype=np.uint8,
+            )
+
+        if mask.shape != (image_height, image_width):
+            mask_image = Image.fromarray(mask, mode="L")
+            mask_image = mask_image.resize(
+                (image_width, image_height),
+                Image.Resampling.NEAREST,
+            )
+            mask = np.asarray(mask_image, dtype=np.uint8)
+
+        binary_mask = mask > 0
+        mask_area = int(binary_mask.sum())
+
+        if mask_area <= 0:
+            return None, 0, None
+
+        coco_rle = _coco_uncompressed_rle(binary_mask)
+
+        if coco_rle is None:
+            return None, mask_area, None
+
+        raw_score = segmentation.get("score")
+        try:
+            sam_score = (
+                float(raw_score)
+                if raw_score is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            sam_score = None
+
+        return coco_rle, mask_area, sam_score
+
+    except Exception as exc:
+        logger.warning(
+            "COCO export could not convert SAM mask '{}' for '{}': {}",
+            mask_path,
+            detection.get("object_id", "unknown"),
+            exc,
+        )
+        return None, None, None
+
+
+# ============================================================================
 # FINAL OUTPUT COMPOSITING
 # ============================================================================
 
@@ -3662,6 +3958,7 @@ def main() -> None:
     sam_segmentation_stage_time = 0.0
     yolopv2_stage_time = 0.0
     final_output_stage_time = 0.0
+    coco_export_stage_time = 0.0
     cleanup_stage_time = 0.0
 
     initialization_stage_start = pipeline_start
@@ -3766,19 +4063,7 @@ def main() -> None:
                     len(image_paths),
                     len(batch),
                 )
-                logger.info(
-                    "GPU BEFORE BATCH"
-                )
-
-                logger.info(
-                    "Allocated : {} GB",
-                    round(torch.cuda.memory_allocated() / 1024**3, 2),
-                )
-
-                logger.info(
-                    "Reserved : {} GB",
-                    round(torch.cuda.memory_reserved() / 1024**3, 2),
-                )
+                log_gpu_memory("BEFORE SCENE BATCH")
                 logger.info("=" * 80)
 
                 try:
@@ -3840,12 +4125,12 @@ def main() -> None:
 
             
 
-            model.unload()
-
             cleanup_stage_resources(
                 engine,
                 model,
             )
+            engine = None
+            model = None
 
             log_gpu_memory(
                 "AFTER SCENE UNDERSTANDING CLEANUP"
@@ -4113,7 +4398,11 @@ def main() -> None:
     # YOLOPv2 AUXILIARY ROAD PERCEPTION
     # ==============================================================
 
-    # YOLOPv2 replaces the old BDD100K auxiliary branch.
+    # Always initialize this mapping so disabled/failed YOLOPv2 execution
+    # cannot leave the later fusion stage with an undefined variable.
+    yolopv2_detections_by_image: dict[str, list[dict[str, Any]]] = {}
+
+    # YOLOPv2 is an auxiliary road-perception model.
     # Generic road users come from YOLOPv2; signs/signals, specialized
     # vehicles and other out-of-set traffic objects remain with the VLM.
     if not args.no_yolopv2 and getattr(
@@ -4880,6 +5169,821 @@ def main() -> None:
         time.perf_counter() - final_output_stage_start
     )
 
+    # ==============================================================
+    # FINAL DATASET EXPORT
+    # ==============================================================
+
+    def export_final_datasets(
+        config: Any,
+        image_paths: list[Path],
+        final_detections_by_image: dict[str, list[dict[str, Any]]],
+    ) -> tuple[Path, Path]:
+        """Export the exact same final detections to canonical COCO and YOLO.
+
+        The two formats are generated from one in-memory source of truth:
+        ``final_detections_by_image`` after all enabled final model stages.
+
+        Layout
+        ------
+        outputs/
+          COCO_FORMAT/
+            images/
+              train/
+              val/
+              test/
+            annotations/
+              instances_train.json
+              instances_val.json
+              instances_test.json
+              instances_final.json
+              per_image/
+                <stem>.json
+          YOLO_FORMAT/
+            images/
+              train/
+              val/
+              test/
+            labels/
+              train/
+              val/
+              test/
+            data.yaml
+          FINAL/
+            visualizations/
+              <stem>_FINAL.png
+          SEGMENTATION_RESULTS/
+            <stem>/
+              <stem>_segmented.png
+              masks/
+                <stem>_object_<id>.png
+              <stem>.json
+              yolopv2/
+                <stem>_drivable.png
+                <stem>_lane.png
+
+        A deterministic 80/10/10 split is shared by both dataset formats.
+        The COCO/YOLO dataset images are the SAM-segmented images when SAM
+        succeeded, rather than untouched originals. The complete unsplit
+        segmentation artifacts are preserved separately under
+        SEGMENTATION_RESULTS, while FINAL/visualizations contains the
+        human-readable combined visualization.
+        """
+
+        import hashlib
+
+        outputs_dir = config.paths.outputs
+        coco_dir = outputs_dir / "COCO_FORMAT"
+        yolo_dir = outputs_dir / "YOLO_FORMAT"
+        final_dir = outputs_dir / "FINAL"
+
+        coco_images_root = coco_dir / "images"
+        coco_annotations_dir = coco_dir / "annotations"
+        coco_per_image_dir = coco_annotations_dir / "per_image"
+
+        yolo_images_root = yolo_dir / "images"
+        yolo_labels_root = yolo_dir / "labels"
+
+        final_visualizations_dir = final_dir / "visualizations"
+        segmentation_results_dir = outputs_dir / "SEGMENTATION_RESULTS"
+
+        split_names = ("train", "val", "test")
+
+        # Remove only the two generated dataset trees before rebuilding them.
+        # Do NOT remove FINAL, SEGMENTATION_RESULTS, caches, logs, or model
+        # outputs. This guarantees that a failed previous export cannot leave
+        # a misleading half-written COCO/YOLO dataset behind.
+        for dataset_dir in (coco_dir, yolo_dir):
+            if dataset_dir.exists():
+                shutil.rmtree(dataset_dir)
+
+        for split in split_names:
+            (coco_images_root / split).mkdir(parents=True, exist_ok=True)
+            (yolo_images_root / split).mkdir(parents=True, exist_ok=True)
+            (yolo_labels_root / split).mkdir(parents=True, exist_ok=True)
+
+        coco_annotations_dir.mkdir(parents=True, exist_ok=True)
+        coco_per_image_dir.mkdir(parents=True, exist_ok=True)
+        final_visualizations_dir.mkdir(parents=True, exist_ok=True)
+        segmentation_results_dir.mkdir(parents=True, exist_ok=True)
+
+        # --------------------------------------------------------------
+        # Deterministic shared split
+        # --------------------------------------------------------------
+        #
+        # A stable SHA-256 bucket avoids Python's randomized hash seed and
+        # therefore produces the same split across machines/runs.
+        def _split_for_image(image_name: str) -> str:
+            digest = hashlib.sha256(
+                image_name.encode("utf-8")
+            ).hexdigest()
+
+            bucket = int(digest[:8], 16) / 0x100000000
+
+            if bucket < 0.80:
+                return "train"
+            if bucket < 0.90:
+                return "val"
+            return "test"
+
+        valid_image_paths: list[Path] = []
+
+        for image_path in sorted(
+            image_paths,
+            key=lambda path: path.name.lower(),
+        ):
+            if not image_path.exists():
+                logger.warning(
+                    "Dataset export skipped missing image '{}'.",
+                    image_path,
+                )
+                continue
+
+            try:
+                with Image.open(image_path) as image:
+                    image.verify()
+            except Exception as exc:
+                logger.warning(
+                    "Dataset export skipped unreadable image '{}': {}",
+                    image_path,
+                    exc,
+                )
+                continue
+
+            valid_image_paths.append(image_path)
+
+        split_by_image = {
+            image_path.name: _split_for_image(image_path.name)
+            for image_path in valid_image_paths
+        }
+
+        # --------------------------------------------------------------
+        # Build one global category mapping from the FINAL detections.
+        # Both COCO and YOLO use this exact mapping.
+        # --------------------------------------------------------------
+        category_names: set[str] = set()
+
+        for image_path in valid_image_paths:
+            try:
+                with Image.open(image_path) as image:
+                    image_width, image_height = image.size
+            except Exception as exc:
+                logger.warning(
+                    "Dataset export could not inspect '{}': {}",
+                    image_path,
+                    exc,
+                )
+                continue
+
+            for detection in final_detections_by_image.get(
+                image_path.name,
+                [],
+            ):
+                if not isinstance(detection, dict):
+                    continue
+
+                bbox_result = _coco_bbox(
+                    detection.get("bbox"),
+                    image_width,
+                    image_height,
+                )
+
+                if bbox_result is None:
+                    continue
+
+                category_names.add(
+                    _coco_normalize_category_name(detection)
+                )
+
+        sorted_category_names = sorted(category_names)
+
+        categories_by_name: dict[str, dict[str, Any]] = {}
+
+        for category_index, category_name in enumerate(
+            sorted_category_names,
+            start=1,
+        ):
+            # Find a representative detection to preserve the superclass.
+            representative = None
+
+            for image_path in valid_image_paths:
+                for detection in final_detections_by_image.get(
+                    image_path.name,
+                    [],
+                ):
+                    if (
+                        isinstance(detection, dict)
+                        and _coco_normalize_category_name(detection)
+                        == category_name
+                    ):
+                        representative = detection
+                        break
+                if representative is not None:
+                    break
+
+            categories_by_name[category_name] = {
+                "id": category_index,
+                "name": category_name,
+                "supercategory": (
+                    _detection_group(representative)
+                    if isinstance(representative, dict)
+                    else "traffic"
+                ) or "traffic",
+            }
+
+        coco_categories = [
+            categories_by_name[name]
+            for name in sorted(
+                categories_by_name,
+                key=lambda name: categories_by_name[name]["id"],
+            )
+        ]
+
+        # --------------------------------------------------------------
+        # Create dataset records
+        # --------------------------------------------------------------
+        coco_images_by_split: dict[str, list[dict[str, Any]]] = {
+            split: []
+            for split in split_names
+        }
+        coco_annotations_by_split: dict[str, list[dict[str, Any]]] = {
+            split: []
+            for split in split_names
+        }
+
+        per_image_payloads: dict[str, dict[str, Any]] = {}
+
+        image_id = 1
+        annotation_id = 1
+
+        for image_path in valid_image_paths:
+            split = split_by_image[image_path.name]
+
+            try:
+                with Image.open(image_path) as image:
+                    image_width, image_height = image.size
+            except Exception as exc:
+                logger.warning(
+                    "Dataset export could not open '{}': {}",
+                    image_path,
+                    exc,
+                )
+                continue
+
+            # Training dataset images MUST remain the ORIGINAL INPUTS.
+            # SAM masks, bounding boxes, labels, and other painted
+            # visualizations are exported separately for inspection.
+            # Baking those predictions into the training pixels would leak
+            # annotation artifacts into the model's input.
+            for destination_root in (
+                coco_images_root / split,
+                yolo_images_root / split,
+            ):
+                destination = destination_root / image_path.name
+                try:
+                    shutil.copy2(image_path, destination)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not copy original dataset image '{}' -> '{}': {}",
+                        image_path,
+                        destination,
+                        exc,
+                    )
+
+            # The COCO file_name must match the actual copied original
+            # image. Do not point COCO at a SAM-generated image.
+            dataset_file_name = image_path.name
+
+            image_record = {
+                "id": image_id,
+                "file_name": dataset_file_name,
+                "width": int(image_width),
+                "height": int(image_height),
+            }
+
+            coco_images_by_split[split].append(image_record)
+
+            per_image_annotations: list[dict[str, Any]] = []
+            yolo_lines: list[str] = []
+
+            detections = final_detections_by_image.get(
+                image_path.name,
+                [],
+            )
+
+            for detection_index, detection in enumerate(detections):
+                if not isinstance(detection, dict):
+                    continue
+
+                bbox_result = _coco_bbox(
+                    detection.get("bbox"),
+                    image_width,
+                    image_height,
+                )
+
+                if bbox_result is None:
+                    logger.warning(
+                        "Dataset export skipped invalid bbox for '{}' "
+                        "detection {}.",
+                        image_path.name,
+                        detection_index + 1,
+                    )
+                    continue
+
+                bbox, bbox_area = bbox_result
+                category_name = _coco_normalize_category_name(detection)
+                category_id = categories_by_name[category_name]["id"]
+
+                segmentation, mask_area, sam_score = (
+                    _coco_segmentation_from_detection(
+                        detection=detection,
+                        image_width=image_width,
+                        image_height=image_height,
+                    )
+                )
+
+                annotation: dict[str, Any] = {
+                    "id": annotation_id,
+                    "image_id": image_id,
+                    "category_id": category_id,
+                    "bbox": bbox,
+                    "area": (
+                        int(mask_area)
+                        if mask_area is not None and mask_area > 0
+                        else round(bbox_area, 3)
+                    ),
+                    "iscrowd": 0,
+                }
+
+                if segmentation is not None:
+                    annotation["segmentation"] = segmentation
+
+                if detection.get("object_id") is not None:
+                    annotation["object_id"] = detection.get("object_id")
+
+                if detection.get("source"):
+                    annotation["source"] = str(detection["source"])
+
+                for key in (
+                    "scene_confidence",
+                    "yolopv2_confidence",
+                    "ontology_score",
+                    "grounding_confidence",
+                ):
+                    value = detection.get(key)
+                    if value is not None:
+                        try:
+                            annotation[key] = float(value)
+                        except (TypeError, ValueError):
+                            pass
+
+                if sam_score is not None:
+                    annotation["sam_score"] = float(sam_score)
+
+                coco_annotations_by_split[split].append(annotation)
+                per_image_annotations.append(annotation)
+
+                # Same bbox, same category mapping, same final detection.
+                x, y, width, height = bbox
+                x_center = (x + width / 2.0) / image_width
+                y_center = (y + height / 2.0) / image_height
+                norm_width = width / image_width
+                norm_height = height / image_height
+
+                yolo_class_id = category_id - 1
+
+                yolo_lines.append(
+                    f"{yolo_class_id} "
+                    f"{x_center:.6f} "
+                    f"{y_center:.6f} "
+                    f"{norm_width:.6f} "
+                    f"{norm_height:.6f}"
+                )
+
+                annotation_id += 1
+
+            label_path = (
+                yolo_labels_root
+                / split
+                / f"{image_path.stem}.txt"
+            )
+            label_path.write_text(
+                "\n".join(yolo_lines)
+                + ("\n" if yolo_lines else ""),
+                encoding="utf-8",
+            )
+
+            per_image_payloads[image_path.name] = {
+                "split": split,
+                "image": image_record,
+                "annotations": per_image_annotations,
+            }
+
+            image_id += 1
+
+        # --------------------------------------------------------------
+        # COCO writers
+        # --------------------------------------------------------------
+        def _write_coco(
+            path: Path,
+            split: str | None = None,
+        ) -> None:
+            if split is None:
+                images = [
+                    image
+                    for split_name in split_names
+                    for image in coco_images_by_split[split_name]
+                ]
+                annotations = [
+                    annotation
+                    for split_name in split_names
+                    for annotation in coco_annotations_by_split[split_name]
+                ]
+                description = "TraffCOCO VLM-First final annotations"
+            else:
+                images = coco_images_by_split[split]
+                annotations = coco_annotations_by_split[split]
+                description = (
+                    f"TraffCOCO VLM-First final annotations ({split} split)"
+                )
+
+            payload = {
+                "info": {
+                    "description": description,
+                    "version": "1.0",
+                    "year": 2026,
+                    "pipeline": (
+                        "Scene Understanding -> Ontology -> "
+                        "Locate Anything -> Annotation/Postprocessing -> "
+                        "Semantic Verification -> YOLOPv2 Fusion -> SAM 2"
+                    ),
+                },
+                "licenses": [],
+                "images": images,
+                "annotations": annotations,
+                "categories": coco_categories,
+            }
+
+            path.write_text(
+                json.dumps(
+                    payload,
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+        for split in split_names:
+            _write_coco(
+                coco_annotations_dir / f"instances_{split}.json",
+                split=split,
+            )
+
+        coco_path = coco_annotations_dir / "instances_final.json"
+        _write_coco(coco_path)
+
+        # Per-image COCO JSON, retaining the requested individual bbox
+        # coordinate files while pointing at the same final annotation data.
+        for image_name, payload in per_image_payloads.items():
+            split = payload["split"]
+
+            per_image_document = {
+                "info": {
+                    "description": (
+                        "TraffCOCO final per-image annotation"
+                    ),
+                    "version": "1.0",
+                    "format": "COCO",
+                    "split": split,
+                },
+                "licenses": [],
+                "images": [payload["image"]],
+                "annotations": payload["annotations"],
+                "categories": coco_categories,
+            }
+
+            per_image_path = (
+                coco_per_image_dir
+                / f"{Path(image_name).stem}.json"
+            )
+            per_image_path.write_text(
+                json.dumps(
+                    per_image_document,
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+        # --------------------------------------------------------------
+        # YOLO dataset YAML
+        # --------------------------------------------------------------
+        #
+        # paths are relative to YOLO_FORMAT. This is the canonical Ultralytics
+        # style layout and, unlike the previous version, train/val/test do not
+        # all point to the same directory.
+        yaml_lines = [
+            f"path: {yolo_dir.as_posix()}",
+            "train: images/train",
+            "val: images/val",
+            "test: images/test",
+            "",
+            f"nc: {len(coco_categories)}",
+            "names:",
+        ]
+
+        for category in coco_categories:
+            class_id = category["id"] - 1
+            escaped_name = str(category["name"]).replace("'", "''")
+            yaml_lines.append(
+                f"  {class_id}: '{escaped_name}'"
+            )
+
+        yolo_yaml_path = yolo_dir / "data.yaml"
+        yolo_yaml_path.write_text(
+            "\n".join(yaml_lines) + "\n",
+            encoding="utf-8",
+        )
+
+        # --------------------------------------------------------------
+        # Complete segmentation artifacts (NO train/val/test split)
+        # --------------------------------------------------------------
+        # Preserve the complete per-image SAM output so it is directly
+        # inspectable after the run: the segmented composite, every object
+        # mask, SAM JSON metadata, and YOLOPv2 semantic masks.
+        for image_path in valid_image_paths:
+            image_result_dir = segmentation_results_dir / image_path.stem
+            image_result_dir.mkdir(parents=True, exist_ok=True)
+
+            sam_dir = outputs_dir / "segmentation"
+            segmented_source = sam_dir / f"{image_path.stem}_segmented.png"
+            sam_json_source = sam_dir / f"{image_path.stem}.json"
+            sam_masks_source = sam_dir / "masks"
+
+            if segmented_source.exists():
+                try:
+                    shutil.copy2(
+                        segmented_source,
+                        image_result_dir / segmented_source.name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not copy SAM segmented image '{}': {}",
+                        segmented_source,
+                        exc,
+                    )
+
+            if sam_json_source.exists():
+                try:
+                    shutil.copy2(
+                        sam_json_source,
+                        image_result_dir / sam_json_source.name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not copy SAM metadata '{}': {}",
+                        sam_json_source,
+                        exc,
+                    )
+
+            if sam_masks_source.exists():
+                destination_masks = image_result_dir / "masks"
+                destination_masks.mkdir(parents=True, exist_ok=True)
+                for mask_path in sorted(sam_masks_source.glob(
+                    f"{image_path.stem}_object_*.png"
+                )):
+                    try:
+                        shutil.copy2(
+                            mask_path,
+                            destination_masks / mask_path.name,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not copy SAM object mask '{}': {}",
+                            mask_path,
+                            exc,
+                        )
+
+            yolopv2_masks_dir = outputs_dir / "yolopv2_segmentation" / "masks"
+            semantic_mask_dir = image_result_dir / "yolopv2"
+            semantic_mask_dir.mkdir(parents=True, exist_ok=True)
+
+            for mask_name in (
+                f"{image_path.stem}_drivable.png",
+                f"{image_path.stem}_lane.png",
+            ):
+                source_mask = yolopv2_masks_dir / mask_name
+                if source_mask.exists():
+                    try:
+                        shutil.copy2(
+                            source_mask,
+                            semantic_mask_dir / mask_name,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not copy YOLOPv2 semantic mask '{}': {}",
+                            source_mask,
+                            exc,
+                        )
+
+            # Always provide a compact manifest for this image, even if SAM
+            # was unavailable. This makes the final artifact self-describing.
+            segmentation_manifest = {
+                "image": image_path.name,
+                "training_image": image_path.name,
+                "training_image_policy": "original_input",
+                "segmented_image": (
+                    str(image_result_dir / segmented_source.name)
+                    if segmented_source.exists()
+                    else None
+                ),
+                "sam_metadata": (
+                    str(image_result_dir / sam_json_source.name)
+                    if sam_json_source.exists()
+                    else None
+                ),
+                "sam_masks_directory": (
+                    str(image_result_dir / "masks")
+                    if (image_result_dir / "masks").exists()
+                    else None
+                ),
+                "yolopv2_semantic_masks_directory": (
+                    str(semantic_mask_dir)
+                    if any(semantic_mask_dir.iterdir())
+                    else None
+                ),
+                "final_visualization": (
+                    str(final_visualizations_dir / f"{image_path.stem}_FINAL.png")
+                ),
+                "detections": len(
+                    final_detections_by_image.get(image_path.name, [])
+                ),
+            }
+
+            (image_result_dir / "segmentation_manifest.json").write_text(
+                json.dumps(
+                    segmentation_manifest,
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+        # --------------------------------------------------------------
+        # Final visualization copy
+        # --------------------------------------------------------------
+        for image_path in valid_image_paths:
+            source = final_dir / f"{image_path.stem}_FINAL.png"
+            destination = final_visualizations_dir / source.name
+
+            if source.exists():
+                try:
+                    shutil.copy2(source, destination)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not copy final visualization '{}' -> '{}': {}",
+                        source,
+                        destination,
+                        exc,
+                    )
+
+        # --------------------------------------------------------------
+        # Dataset manifest
+        # --------------------------------------------------------------
+        split_counts = {
+            split: len(coco_images_by_split[split])
+            for split in split_names
+        }
+        split_annotation_counts = {
+            split: len(coco_annotations_by_split[split])
+            for split in split_names
+        }
+
+        manifest = {
+            "dataset": "TraffCOCO",
+            "format_version": "1.0",
+            "source_of_truth": "final_detections_by_image",
+            "split_strategy": {
+                "method": "stable_sha256",
+                "train": 0.80,
+                "val": 0.10,
+                "test": 0.10,
+            },
+            "images": sum(split_counts.values()),
+            "annotations": sum(split_annotation_counts.values()),
+            "categories": len(coco_categories),
+            "splits": {
+                split: {
+                    "images": split_counts[split],
+                    "annotations": split_annotation_counts[split],
+                    "coco_annotations": str(
+                        coco_annotations_dir / f"instances_{split}.json"
+                    ),
+                    "coco_images": str(coco_images_root / split),
+                    "yolo_images": str(yolo_images_root / split),
+                    "yolo_labels": str(yolo_labels_root / split),
+                }
+                for split in split_names
+            },
+            "coco": {
+                "directory": str(coco_dir),
+                "images": str(coco_images_root),
+                "annotations": str(coco_path),
+                "per_image_annotations": str(coco_per_image_dir),
+            },
+            "yolo": {
+                "directory": str(yolo_dir),
+                "images": str(yolo_images_root),
+                "labels": str(yolo_labels_root),
+                "data_yaml": str(yolo_yaml_path),
+            },
+            "visualizations": str(final_visualizations_dir),
+            "segmentation_results": str(segmentation_results_dir),
+        }
+
+        manifest_path = outputs_dir / "dataset_manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        logger.info(
+            "Final datasets exported from the SAME final detections: "
+            "{} image(s), {} annotation(s), {} categor(y/ies).",
+            manifest["images"],
+            manifest["annotations"],
+            manifest["categories"],
+        )
+        logger.info(
+            "Shared split counts: train={} val={} test={}",
+            split_counts["train"],
+            split_counts["val"],
+            split_counts["test"],
+        )
+        logger.info("COCO dataset: {}", coco_dir)
+        logger.info("COCO final annotations: {}", coco_path)
+        logger.info("YOLO dataset: {}", yolo_dir)
+        logger.info("YOLO data.yaml: {}", yolo_yaml_path)
+        logger.info(
+            "FINAL visualizations: {}",
+            final_visualizations_dir,
+        )
+        logger.info(
+            "Complete segmentation results: {}",
+            segmentation_results_dir,
+        )
+
+        return coco_path, yolo_yaml_path
+
+    # ==============================================================
+    # FINAL DATASET EXPORT
+    # ==============================================================
+    #
+    # This call was previously missing. The exporter existed, humanity
+    # continued, and the actual dataset files consequently were never
+    # guaranteed to be written. Now the export is an explicit pipeline stage
+    # after FINAL visualization, using exactly the final fused/segmented
+    # detection map.
+    coco_export_stage_start = time.perf_counter()
+
+    try:
+        coco_path, yolo_yaml_path = export_final_datasets(
+            config=config,
+            image_paths=image_paths,
+            final_detections_by_image=final_detections_by_image,
+        )
+    except Exception as exc:
+        logger.error(
+            "Final COCO/YOLO dataset export failed: {}",
+            exc,
+        )
+        failed_images.append(
+            (
+                "__DATASET_EXPORT__",
+                "COCO/YOLO Export",
+                str(exc),
+            )
+        )
+        coco_path = (
+            config.paths.outputs
+            / "COCO_FORMAT"
+            / "annotations"
+            / "instances_final.json"
+        )
+        yolo_yaml_path = (
+            config.paths.outputs
+            / "YOLO_FORMAT"
+            / "data.yaml"
+        )
+    finally:
+        coco_export_stage_time = (
+            time.perf_counter()
+            - coco_export_stage_start
+        )
+
     # ------------------------------------------------------------------
     # Final stage-resource cleanup
     #
@@ -4891,10 +5995,10 @@ def main() -> None:
     cleanup_stage_start = time.perf_counter()
 
     cleanup_stage_resources(
-        globals().get("grounding_engine"),
-        globals().get("ontology_engine"),
-        globals().get("engine"),
-        globals().get("model"),
+        grounding_engine,
+        ontology_engine,
+        engine,
+        model,
     )
 
     log_gpu_memory(
@@ -4928,6 +6032,7 @@ def main() -> None:
         + yolopv2_stage_time
         + sam_segmentation_stage_time
         + final_output_stage_time
+        + coco_export_stage_time
         + cleanup_stage_time
     )
 
@@ -5008,6 +6113,11 @@ def main() -> None:
     logger.info(
         "Final Combined Output Time      : {:.2f} s",
         final_output_stage_time,
+    )
+
+    logger.info(
+        "COCO Dataset Export Time        : {:.2f} s",
+        coco_export_stage_time,
     )
 
     logger.info(
@@ -5217,9 +6327,50 @@ def main() -> None:
         config.paths.outputs / "yolopv2_segmentation",
     )
     logger.info(
-        "FINAL combined output directory: {}",
-        config.paths.outputs / "FINAL",
+        "COCO dataset directory: {}",
+        config.paths.outputs / "COCO_FORMAT",
     )
+
+    logger.info(
+        "COCO images directory: {}",
+        config.paths.outputs / "COCO_FORMAT" / "images",
+    )
+
+    logger.info(
+        "COCO annotations file: {}",
+        config.paths.outputs
+        / "COCO_FORMAT"
+        / "annotations"
+        / "instances_final.json",
+    )
+
+    logger.info(
+        "YOLO dataset directory: {}",
+        config.paths.outputs / "YOLO_FORMAT",
+    )
+
+    logger.info(
+        "YOLO images directory: {}",
+        config.paths.outputs / "YOLO_FORMAT" / "images",
+    )
+
+    logger.info(
+        "YOLO labels directory: {}",
+        config.paths.outputs / "YOLO_FORMAT" / "labels",
+    )
+
+    logger.info(
+        "YOLO data.yaml: {}",
+        config.paths.outputs
+        / "YOLO_FORMAT"
+        / "data.yaml",
+    )
+
+    logger.info(
+        "FINAL visualizations directory: {}",
+        config.paths.outputs / "FINAL" / "visualizations",
+    )
+    
 
     logger.info("=" * 70)
 
