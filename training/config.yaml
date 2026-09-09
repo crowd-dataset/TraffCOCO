@@ -1,10 +1,22 @@
 # TraffCOCO YOLO training configuration
+#
+# Training artifacts/results are written to:
+#   outputs/training/
+#
+# The base model and completed trained models live in:
+#   training/
+#
+# train.py resumes from:
+#   outputs/training/train/weights/last.pt
+#
+# After a successful run:
+#   training/weights/best.pt
+#   training/weights/last.pt
+#
+# are updated from the completed training run.
 
 model:
-  # Replace with the model you actually want to train.
-  # Example:
-  # yolo26n.pt
-  path: yolo26n.pt
+  path: ./training/pretrained/yolo26n.pt
 
 dataset:
   path: ../outputs/YOLO_FORMAT/data.yaml
@@ -16,16 +28,17 @@ training:
   workers: 8
   patience: 20
   seed: 42
-
-  # Set to null for automatic device selection.
-  # Examples:
-  # device: 0
-  # device: 1
-  # device: cpu
   device: null
 
-output:
-  project: ./runs
-  name: traffcoco_yolo
+  # train.py uses save_period=1 so last.pt is refreshed every completed
+  # epoch. If the process is interrupted, the next run resumes from it.
 
+output:
+  project: ../outputs/training
+  name: train
   cache: false
+
+resume:
+  enabled: true
+  checkpoint: ../outputs/training/train/weights/last.pt
+  state_file: ../outputs/training/training_state.json

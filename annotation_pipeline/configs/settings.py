@@ -351,7 +351,7 @@ def _resolve_paths(project_root: Path) -> PathsConfig:
     logger.info(
         "Resolving filesystem paths."
     )
-    outputs = project_root / "annotation_pipeline" / "outputs"
+    outputs = project_root / "outputs"
 
     ontology_root = project_root/ "annotation_pipeline"/ "models" / "ontology"
     

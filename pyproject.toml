@@ -38,6 +38,9 @@ dependencies = [
     "decord>=0.6.0",
     "lmdb>=2.3.0",
     "peft>=0.20.0",
+    # YOLO training
+    "ultralytics>=8.4.120",
+    "submitit>=1.5.2",
 ]
 
 [project.optional-dependencies]

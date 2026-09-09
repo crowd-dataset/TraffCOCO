@@ -57,6 +57,7 @@ import time
 import gc
 import shutil
 import re
+import importlib.util
 from typing import Any
 from tqdm import tqdm
 
@@ -3802,6 +3803,63 @@ def create_final_output(
     return final_path
 
 # ============================================================================
+# YOLO TRAINING LOADER
+# ============================================================================
+
+
+def load_project_yolo_trainer():
+    """Load TraffCOCO's own training/train.py by exact file path.
+
+    The SAM2 repository also contains a package named ``training``.
+    Importing ``training.train`` by package name can therefore resolve to
+    SAM2's training module instead of TraffCOCO's training script.
+    Loading this exact project file avoids that namespace collision.
+    """
+
+    main_dir = Path(__file__).resolve().parent
+
+    # In the TraffCOCO repository the main pipeline lives under
+    # ``annotation_pipeline/`` while ``training/`` is a sibling directory.
+    # The first candidate also supports a repository-root main.py.
+    candidates = (
+        main_dir / "training" / "train.py",
+        main_dir.parent / "training" / "train.py",
+    )
+
+    training_file = next(
+        (candidate for candidate in candidates if candidate.is_file()),
+        None,
+    )
+
+    if training_file is None:
+        raise FileNotFoundError(
+            "TraffCOCO YOLO training script not found. Checked: "
+            + ", ".join(str(candidate) for candidate in candidates)
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "traffcoco_yolo_training",
+        training_file,
+    )
+
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Could not load TraffCOCO YOLO training script: {training_file}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    train_yolo = getattr(module, "train_yolo", None)
+    if not callable(train_yolo):
+        raise AttributeError(
+            f"TraffCOCO training script does not define train_yolo(): {training_file}"
+        )
+
+    return train_yolo, training_file
+
+
+# ============================================================================
 # Main Pipeline
 # ============================================================================
 
@@ -3863,6 +3921,25 @@ def main() -> None:
 
     config.paths.ensure_output_dirs()
 
+    # ``ensure_output_dirs()`` creates the configured output tree eagerly.
+    # Remove stage-owned model output directories immediately when their
+    # stages are disabled so a disabled stage cannot leave stale artifacts.
+    if not config.pipeline.run_segmentation:
+        shutil.rmtree(config.paths.outputs / "segmentation", ignore_errors=True)
+        shutil.rmtree(config.paths.outputs / "SEGMENTATION_RESULTS", ignore_errors=True)
+
+    if not getattr(config.pipeline, "run_yolopv2", False):
+        shutil.rmtree(
+            config.paths.outputs / "yolopv2_segmentation",
+            ignore_errors=True,
+        )
+
+    if not config.pipeline.save_visualizations:
+        shutil.rmtree(
+            config.paths.outputs / "FINAL",
+            ignore_errors=True,
+        )
+
     logger.info("=" * 80)
     logger.info("VLM-First Pipeline")
     logger.info("=" * 80)
@@ -3883,6 +3960,8 @@ def main() -> None:
         help="Number of images to process (0 = all).",
     )
 
+    # Keep the existing CLI stage-disable flags. These override the JSON
+    # configuration for the current run only.
     parser.add_argument(
         "--no-sam-segmentation",
         action="store_true",
@@ -3894,7 +3973,145 @@ def main() -> None:
         help="Skip the auxiliary YOLOPv2 road-perception stage.",
     )
 
+    parser.add_argument(
+        "--start-stage",
+        choices=(
+            "scene_understanding",
+            "ontology_reasoning",
+            "grounding",
+            "yolopv2",
+            "annotation",
+            "semantic_verification",
+            "sam2",
+            "final_output",
+            "dataset_export",
+            "yolo_training",
+        ),
+        default=None,
+        help=(
+            "Start execution from this pipeline stage and continue through "
+            "the remaining stages. Earlier processing stages are skipped. "
+            "Their required cache/output data must already exist. "
+            "Example: --start-stage grounding"
+        ),
+    )
+
     args = parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # Apply CLI stage controls
+    # ------------------------------------------------------------------
+
+    # The CLI never removes the JSON controls. It only provides per-run
+    # overrides, so the same main.py can still be driven entirely by JSON.
+    if args.no_sam_segmentation:
+        object.__setattr__(config.pipeline, "run_segmentation", False)
+
+    if args.no_yolopv2:
+        object.__setattr__(config.pipeline, "run_yolopv2", False)
+
+    # Canonical execution order for --start-stage. Image preparation and
+    # discovery always happen because every downstream stage needs the input
+    # image list.
+    pipeline_stage_order = (
+        "scene_understanding",
+        "ontology_reasoning",
+        "grounding",
+        "yolopv2",
+        "annotation",
+        "semantic_verification",
+        "sam2",
+        "final_output",
+        "dataset_export",
+        "yolo_training",
+    )
+
+    start_stage_index = (
+        pipeline_stage_order.index(args.start_stage)
+        if args.start_stage is not None
+        else 0
+    )
+
+    def stage_is_at_or_after(stage_name: str) -> bool:
+        """Return whether a stage is included by --start-stage."""
+
+        return (
+            pipeline_stage_order.index(stage_name)
+            >= start_stage_index
+        )
+
+    if args.start_stage is not None:
+        logger.info(
+            "CLI start stage: '{}'. Earlier processing stages will be skipped.",
+            args.start_stage,
+        )
+
+    logger.info(
+        "CLI stage controls | start={} | no_sam={} | no_yolopv2={}",
+        args.start_stage or "pipeline start",
+        args.no_sam_segmentation,
+        args.no_yolopv2,
+    )
+
+    # Apply the start-stage rule to JSON-controlled stages. Stages after the
+    # selected stage retain their JSON settings exactly as configured.
+    if not stage_is_at_or_after("scene_understanding"):
+        object.__setattr__(config.pipeline, "run_scene_understanding", False)
+
+    if not stage_is_at_or_after("ontology_reasoning"):
+        object.__setattr__(config.pipeline, "run_ontology_reasoning", False)
+
+    if not stage_is_at_or_after("grounding"):
+        object.__setattr__(config.pipeline, "run_grounding", False)
+
+    if not stage_is_at_or_after("yolopv2"):
+        object.__setattr__(config.pipeline, "run_yolopv2", False)
+
+    if not stage_is_at_or_after("annotation"):
+        object.__setattr__(config.pipeline, "run_annotation", False)
+
+    if not stage_is_at_or_after("semantic_verification"):
+        object.__setattr__(config.pipeline, "run_semantic_verification", False)
+
+    if not stage_is_at_or_after("sam2"):
+        object.__setattr__(config.pipeline, "run_segmentation", False)
+
+    # --start-stage final_output also suppresses dataset export until the
+    # final output block has completed. The exporter remains enabled whenever
+    # its position is at or after the requested start stage.
+    run_final_output = (
+        config.pipeline.save_visualizations
+        and stage_is_at_or_after("final_output")
+    )
+    run_dataset_export = stage_is_at_or_after("dataset_export")
+    run_yolo_training = (
+        getattr(config.pipeline, "run_yolo_training", False)
+        and stage_is_at_or_after("yolo_training")
+    )
+
+    # Re-apply the stage-owned cleanup AFTER CLI overrides. This matters when
+    # a CLI --no-* flag disables a stage that is enabled in JSON.
+    if not config.pipeline.run_segmentation:
+        shutil.rmtree(
+            config.paths.outputs / "segmentation",
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            config.paths.outputs / "SEGMENTATION_RESULTS",
+            ignore_errors=True,
+        )
+
+    if not getattr(config.pipeline, "run_yolopv2", False):
+        shutil.rmtree(
+            config.paths.outputs / "yolopv2_segmentation",
+            ignore_errors=True,
+        )
+
+    if not run_final_output:
+        shutil.rmtree(
+            config.paths.outputs / "FINAL",
+            ignore_errors=True,
+        )
 
     # ------------------------------------------------------------------
     # Prepare Random Frames
@@ -3978,6 +4195,7 @@ def main() -> None:
     yolopv2_stage_time = 0.0
     final_output_stage_time = 0.0
     coco_export_stage_time = 0.0
+    yolo_training_stage_time = 0.0
     cleanup_stage_time = 0.0
 
     initialization_stage_start = pipeline_start
@@ -4013,7 +4231,7 @@ def main() -> None:
 
     failed_images: list[tuple[str, str, str]] = []
 
-    if config.pipeline.run_scene_understanding:
+    if config.pipeline.run_scene_understanding and stage_is_at_or_after("scene_understanding"):
 
         # --------------------------------------------------------------
         # Create Scene Understanding Model
@@ -4220,7 +4438,7 @@ def main() -> None:
 
     ontology_stage_start = time.perf_counter()
 
-    if config.pipeline.run_ontology_reasoning:
+    if config.pipeline.run_ontology_reasoning and stage_is_at_or_after("ontology_reasoning"):
 
         logger.info("")
         logger.info("=" * 80)
@@ -4316,7 +4534,7 @@ def main() -> None:
 
     grounding_stage_start = time.perf_counter()
 
-    if config.pipeline.run_grounding:
+    if config.pipeline.run_grounding and stage_is_at_or_after("grounding"):
 
         logger.info("")
         logger.info("=" * 80)
@@ -4436,11 +4654,11 @@ def main() -> None:
     # YOLOPv2 is an auxiliary road-perception model.
     # Generic road users come from YOLOPv2; signs/signals, specialized
     # vehicles and other out-of-set traffic objects remain with the VLM.
-    if not args.no_yolopv2 and getattr(
+    if getattr(
         config.pipeline,
         "run_yolopv2",
-        True,
-    ):
+        False,
+    ) and stage_is_at_or_after("yolopv2"):
         yolopv2_stage_start = time.perf_counter()
         yolopv2_engine = None
 
@@ -4531,7 +4749,7 @@ def main() -> None:
     # YOLOPv2 results are created immediately before annotation and must
     # survive into the later fusion stage. Do not reinitialize this mapping.
 
-    if config.pipeline.run_annotation:
+    if config.pipeline.run_annotation and stage_is_at_or_after("annotation"):
 
         RETRY_THRESHOLD = 30
 
@@ -4774,7 +4992,7 @@ def main() -> None:
     semantic_recovered_count = 0
     semantic_dropped_count = 0
 
-    if config.pipeline.run_semantic_verification:
+    if config.pipeline.run_semantic_verification and stage_is_at_or_after("semantic_verification"):
         (
             final_detections_by_image,
             semantic_verification_stage_time,
@@ -4959,7 +5177,7 @@ def main() -> None:
 
         return fused
 
-    if yolopv2_detections_by_image:
+    if stage_is_at_or_after("yolopv2") and yolopv2_detections_by_image:
         logger.info("")
         logger.info("=" * 80)
         logger.info("FUSING YOLOPv2 ROAD-USER DETECTIONS")
@@ -5006,7 +5224,7 @@ def main() -> None:
     # final in-memory detections after annotation, postprocessing, optional
     # semantic verification, and >30 routing decisions. SAM 2 receives the
     # existing bbox as a box prompt and never replaces that bbox.
-    if not args.no_sam_segmentation:
+    if config.pipeline.run_segmentation and stage_is_at_or_after("sam2"):
         sam_segmentation_stage_start = time.perf_counter()
 
         logger.info("")
@@ -5156,78 +5374,87 @@ def main() -> None:
 
     else:
         logger.info(
-            "Final SAM 2 segmentation skipped by --no-sam-segmentation."
+            "Final SAM 2 segmentation skipped (run_segmentation=false)."
         )
 
-    # ==============================================================
-    # FINAL COMBINED OUTPUT
-    # ==============================================================
+    if run_final_output:
 
-    # This is the single user-facing output. It combines:
-    #   - SAM 2 instance segmentation
-    #   - YOLOPv2 drivable-area segmentation
-    #   - YOLOPv2 lane-line segmentation
-    #   - final fused VLM/Locate Anything + YOLOPv2 detections
-    #
-    # It is deliberately created AFTER SAM 2 so it represents the true
-    # final state of the pipeline.
-    final_output_stage_start = time.perf_counter()
+        # ==============================================================
+        # FINAL COMBINED OUTPUT
+        # ==============================================================
 
-    logger.info("")
-    logger.info("=" * 80)
-    logger.info("FINAL COMBINED OUTPUT")
-    logger.info("=" * 80)
+        # This is the single user-facing output. It combines:
+        #   - SAM 2 instance segmentation
+        #   - YOLOPv2 drivable-area segmentation
+        #   - YOLOPv2 lane-line segmentation
+        #   - final fused VLM/Locate Anything + YOLOPv2 detections
+        #
+        # It is deliberately created AFTER SAM 2 so it represents the true
+        # final state of the pipeline.
+        final_output_stage_start = time.perf_counter()
 
-    for image_path in tqdm(
-        image_paths,
-        desc="FINAL Visualizations",
-        unit="img",
-        dynamic_ncols=True,
-    ):
-        image_name = image_path.name
-        detections = final_detections_by_image.get(
-            image_name,
-            [],
-        )
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("FINAL COMBINED OUTPUT")
+        logger.info("=" * 80)
 
-        try:
-            final_path = create_final_output(
-                config=config,
-                image_path=image_path,
-                final_detections=detections,
-            )
-
-            if image_name in stage_results:
-                stage_results[image_name]["visualization_path"] = str(
-                    final_path
-                )
-                stage_results[image_name]["final_output_path"] = str(
-                    final_path
-                )
-
-            if image_name in results:
-                results[image_name]["annotation"] = stage_results.get(
-                    image_name,
-                    results[image_name].get("annotation", {}),
-                )
-
-        except Exception as exc:
-            logger.error(
-                "Final combined output failed for '{}': {}",
+        for image_path in tqdm(
+            image_paths,
+            desc="FINAL Visualizations",
+            unit="img",
+            dynamic_ncols=True,
+        ):
+            image_name = image_path.name
+            detections = final_detections_by_image.get(
                 image_name,
-                exc,
-            )
-            failed_images.append(
-                (
-                    image_name,
-                    "FINAL Output",
-                    str(exc),
-                )
+                [],
             )
 
-    final_output_stage_time = (
-        time.perf_counter() - final_output_stage_start
-    )
+            try:
+                final_path = create_final_output(
+                    config=config,
+                    image_path=image_path,
+                    final_detections=detections,
+                )
+
+                if image_name in stage_results:
+                    stage_results[image_name]["visualization_path"] = str(
+                        final_path
+                    )
+                    stage_results[image_name]["final_output_path"] = str(
+                        final_path
+                    )
+
+                if image_name in results:
+                    results[image_name]["annotation"] = stage_results.get(
+                        image_name,
+                        results[image_name].get("annotation", {}),
+                    )
+
+            except Exception as exc:
+                logger.error(
+                    "Final combined output failed for '{}': {}",
+                    image_name,
+                    exc,
+                )
+                failed_images.append(
+                    (
+                        image_name,
+                        "FINAL Output",
+                        str(exc),
+                    )
+                )
+
+        final_output_stage_time = (
+            time.perf_counter() - final_output_stage_start
+        )
+
+
+    else:
+        logger.info(
+            "FINAL combined visualization skipped (disabled by config or start stage)."
+        )
+        final_output_stage_time = 0.0
 
     # ==============================================================
     # FINAL DATASET EXPORT
@@ -5323,8 +5550,15 @@ def main() -> None:
 
         coco_annotations_dir.mkdir(parents=True, exist_ok=True)
         coco_per_image_dir.mkdir(parents=True, exist_ok=True)
-        final_visualizations_dir.mkdir(parents=True, exist_ok=True)
-        segmentation_results_dir.mkdir(parents=True, exist_ok=True)
+        if config.pipeline.save_visualizations:
+            final_visualizations_dir.mkdir(parents=True, exist_ok=True)
+
+        if config.pipeline.run_segmentation or getattr(
+            config.pipeline,
+            "run_yolopv2",
+            False,
+        ):
+            segmentation_results_dir.mkdir(parents=True, exist_ok=True)
 
         # --------------------------------------------------------------
         # Deterministic shared split
@@ -5774,201 +6008,207 @@ def main() -> None:
             encoding="utf-8",
         )
 
-        # --------------------------------------------------------------
-        # Complete segmentation artifacts (NO train/val/test split)
-        # --------------------------------------------------------------
-        # Preserve the complete per-image SAM output so it is directly
-        # inspectable after the run: the segmented composite, every object
-        # mask, SAM JSON metadata, and YOLOPv2 semantic masks.
-        for image_path in valid_image_paths:
-            image_result_dir = segmentation_results_dir / image_path.stem
-            image_result_dir.mkdir(parents=True, exist_ok=True)
+        if config.pipeline.run_segmentation or getattr(
+            config.pipeline,
+            "run_yolopv2",
+            False,
+        ):
+                # --------------------------------------------------------------
+                # Complete segmentation artifacts (NO train/val/test split)
+                # --------------------------------------------------------------
+                # Preserve the complete per-image SAM output so it is directly
+                # inspectable after the run: the segmented composite, every object
+                # mask, SAM JSON metadata, and YOLOPv2 semantic masks.
+                for image_path in valid_image_paths:
+                    image_result_dir = segmentation_results_dir / image_path.stem
+                    image_result_dir.mkdir(parents=True, exist_ok=True)
 
-            sam_dir = outputs_dir / "segmentation"
-            segmented_source = sam_dir / f"{image_path.stem}_segmented.png"
-            sam_json_source = sam_dir / f"{image_path.stem}.json"
-            sam_masks_source = sam_dir / "masks"
+                    sam_dir = outputs_dir / "segmentation"
+                    segmented_source = sam_dir / f"{image_path.stem}_segmented.png"
+                    sam_json_source = sam_dir / f"{image_path.stem}.json"
+                    sam_masks_source = sam_dir / "masks"
 
-            if segmented_source.exists():
-                try:
-                    shutil.copy2(
-                        segmented_source,
-                        image_result_dir / segmented_source.name,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Could not copy SAM segmented image '{}': {}",
-                        segmented_source,
-                        exc,
-                    )
+                    if segmented_source.exists():
+                        try:
+                            shutil.copy2(
+                                segmented_source,
+                                image_result_dir / segmented_source.name,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not copy SAM segmented image '{}': {}",
+                                segmented_source,
+                                exc,
+                            )
 
-            if sam_json_source.exists():
-                try:
-                    shutil.copy2(
-                        sam_json_source,
-                        image_result_dir / sam_json_source.name,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Could not copy SAM metadata '{}': {}",
-                        sam_json_source,
-                        exc,
-                    )
+                    if sam_json_source.exists():
+                        try:
+                            shutil.copy2(
+                                sam_json_source,
+                                image_result_dir / sam_json_source.name,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not copy SAM metadata '{}': {}",
+                                sam_json_source,
+                                exc,
+                            )
 
-            if sam_masks_source.exists():
-                destination_masks = image_result_dir / "masks"
-                destination_masks.mkdir(parents=True, exist_ok=True)
-                for mask_path in sorted(sam_masks_source.glob(
-                    f"{image_path.stem}_object_*.png"
-                )):
-                    try:
-                        shutil.copy2(
-                            mask_path,
-                            destination_masks / mask_path.name,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Could not copy SAM object mask '{}': {}",
-                            mask_path,
-                            exc,
-                        )
+                    if sam_masks_source.exists():
+                        destination_masks = image_result_dir / "masks"
+                        destination_masks.mkdir(parents=True, exist_ok=True)
+                        for mask_path in sorted(sam_masks_source.glob(
+                            f"{image_path.stem}_object_*.png"
+                        )):
+                            try:
+                                shutil.copy2(
+                                    mask_path,
+                                    destination_masks / mask_path.name,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Could not copy SAM object mask '{}': {}",
+                                    mask_path,
+                                    exc,
+                                )
 
-            yolopv2_masks_dir = outputs_dir / "yolopv2_segmentation" / "masks"
-            semantic_mask_dir = image_result_dir / "yolopv2"
-            semantic_mask_dir.mkdir(parents=True, exist_ok=True)
+                    yolopv2_masks_dir = outputs_dir / "yolopv2_segmentation" / "masks"
+                    semantic_mask_dir = image_result_dir / "yolopv2"
+                    semantic_mask_dir.mkdir(parents=True, exist_ok=True)
 
-            for mask_name in (
-                f"{image_path.stem}_drivable.png",
-                f"{image_path.stem}_lane.png",
-            ):
-                source_mask = yolopv2_masks_dir / mask_name
-                if source_mask.exists():
-                    try:
-                        shutil.copy2(
-                            source_mask,
-                            semantic_mask_dir / mask_name,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Could not copy YOLOPv2 semantic mask '{}': {}",
-                            source_mask,
-                            exc,
-                        )
+                    for mask_name in (
+                        f"{image_path.stem}_drivable.png",
+                        f"{image_path.stem}_lane.png",
+                    ):
+                        source_mask = yolopv2_masks_dir / mask_name
+                        if source_mask.exists():
+                            try:
+                                shutil.copy2(
+                                    source_mask,
+                                    semantic_mask_dir / mask_name,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Could not copy YOLOPv2 semantic mask '{}': {}",
+                                    source_mask,
+                                    exc,
+                                )
 
-            # Always provide a compact manifest for this image, even if SAM
-            # was unavailable. This makes the final artifact self-describing.
-            segmentation_manifest = {
-                "image": image_path.name,
-                "training_image": image_path.name,
-                "training_image_policy": "original_input",
-                "segmented_image": (
-                    str(image_result_dir / segmented_source.name)
-                    if segmented_source.exists()
-                    else None
-                ),
-                "sam_metadata": (
-                    str(image_result_dir / sam_json_source.name)
-                    if sam_json_source.exists()
-                    else None
-                ),
-                "sam_masks_directory": (
-                    str(image_result_dir / "masks")
-                    if (image_result_dir / "masks").exists()
-                    else None
-                ),
-                "yolopv2_semantic_masks_directory": (
-                    str(semantic_mask_dir)
-                    if any(semantic_mask_dir.iterdir())
-                    else None
-                ),
-                "final_visualization": (
-                    str(final_visualizations_dir / f"{image_path.stem}_FINAL.png")
-                ),
-                "detections": len(
-                    final_detections_by_image.get(image_path.name, [])
-                ),
-            }
+                    # Always provide a compact manifest for this image, even if SAM
+                    # was unavailable. This makes the final artifact self-describing.
+                    segmentation_manifest = {
+                        "image": image_path.name,
+                        "training_image": image_path.name,
+                        "training_image_policy": "original_input",
+                        "segmented_image": (
+                            str(image_result_dir / segmented_source.name)
+                            if segmented_source.exists()
+                            else None
+                        ),
+                        "sam_metadata": (
+                            str(image_result_dir / sam_json_source.name)
+                            if sam_json_source.exists()
+                            else None
+                        ),
+                        "sam_masks_directory": (
+                            str(image_result_dir / "masks")
+                            if (image_result_dir / "masks").exists()
+                            else None
+                        ),
+                        "yolopv2_semantic_masks_directory": (
+                            str(semantic_mask_dir)
+                            if any(semantic_mask_dir.iterdir())
+                            else None
+                        ),
+                        "final_visualization": (
+                            str(final_visualizations_dir / f"{image_path.stem}_FINAL.png")
+                        ),
+                        "detections": len(
+                            final_detections_by_image.get(image_path.name, [])
+                        ),
+                    }
 
-            (image_result_dir / "segmentation_manifest.json").write_text(
-                json.dumps(
-                    segmentation_manifest,
-                    indent=2,
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-
-        # --------------------------------------------------------------
-        # Final visualization copy
-        # --------------------------------------------------------------
-        for image_path in valid_image_paths:
-            source = final_dir / f"{image_path.stem}_FINAL.png"
-            destination = final_visualizations_dir / source.name
-
-            if source.exists():
-                try:
-                    shutil.copy2(source, destination)
-                except Exception as exc:
-                    logger.warning(
-                        "Could not copy final visualization '{}' -> '{}': {}",
-                        source,
-                        destination,
-                        exc,
+                    (image_result_dir / "segmentation_manifest.json").write_text(
+                        json.dumps(
+                            segmentation_manifest,
+                            indent=2,
+                            ensure_ascii=False,
+                        ),
+                        encoding="utf-8",
                     )
 
-        # --------------------------------------------------------------
-        # Dataset manifest
-        # --------------------------------------------------------------
-        split_counts = {
-            split: len(coco_images_by_split[split])
-            for split in split_names
-        }
-        split_annotation_counts = {
-            split: len(coco_annotations_by_split[split])
-            for split in split_names
-        }
+                # --------------------------------------------------------------
+                # Final visualization copy
+                # --------------------------------------------------------------
+                for image_path in valid_image_paths:
+                    source = final_dir / f"{image_path.stem}_FINAL.png"
+                    destination = final_visualizations_dir / source.name
 
-        manifest = {
-            "dataset": "TraffCOCO",
-            "format_version": "1.0",
-            "source_of_truth": "final_detections_by_image",
-            "split_strategy": {
-                "method": "stable_sha256",
-                "train": 0.80,
-                "val": 0.10,
-                "test": 0.10,
-            },
-            "images": sum(split_counts.values()),
-            "annotations": sum(split_annotation_counts.values()),
-            "categories": len(coco_categories),
-            "splits": {
-                split: {
-                    "images": split_counts[split],
-                    "annotations": split_annotation_counts[split],
-                    "coco_annotations": str(
-                        coco_annotations_dir / f"instances_{split}.json"
-                    ),
-                    "coco_images": str(coco_images_root / split),
-                    "yolo_images": str(yolo_images_root / split),
-                    "yolo_labels": str(yolo_labels_root / split),
+                    if source.exists():
+                        try:
+                            shutil.copy2(source, destination)
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not copy final visualization '{}' -> '{}': {}",
+                                source,
+                                destination,
+                                exc,
+                            )
+
+                # --------------------------------------------------------------
+                # Dataset manifest
+                # --------------------------------------------------------------
+                split_counts = {
+                    split: len(coco_images_by_split[split])
+                    for split in split_names
                 }
-                for split in split_names
-            },
-            "coco": {
-                "directory": str(coco_dir),
-                "images": str(coco_images_root),
-                "annotations": str(coco_path),
-                "per_image_annotations": str(coco_per_image_dir),
-            },
-            "yolo": {
-                "directory": str(yolo_dir),
-                "images": str(yolo_images_root),
-                "labels": str(yolo_labels_root),
-                "data_yaml": str(yolo_yaml_path),
-            },
-            "visualizations": str(final_visualizations_dir),
-            "segmentation_results": str(segmentation_results_dir),
-        }
+                split_annotation_counts = {
+                    split: len(coco_annotations_by_split[split])
+                    for split in split_names
+                }
+
+                manifest = {
+                    "dataset": "TraffCOCO",
+                    "format_version": "1.0",
+                    "source_of_truth": "final_detections_by_image",
+                    "split_strategy": {
+                        "method": "stable_sha256",
+                        "train": 0.80,
+                        "val": 0.10,
+                        "test": 0.10,
+                    },
+                    "images": sum(split_counts.values()),
+                    "annotations": sum(split_annotation_counts.values()),
+                    "categories": len(coco_categories),
+                    "splits": {
+                        split: {
+                            "images": split_counts[split],
+                            "annotations": split_annotation_counts[split],
+                            "coco_annotations": str(
+                                coco_annotations_dir / f"instances_{split}.json"
+                            ),
+                            "coco_images": str(coco_images_root / split),
+                            "yolo_images": str(yolo_images_root / split),
+                            "yolo_labels": str(yolo_labels_root / split),
+                        }
+                        for split in split_names
+                    },
+                    "coco": {
+                        "directory": str(coco_dir),
+                        "images": str(coco_images_root),
+                        "annotations": str(coco_path),
+                        "per_image_annotations": str(coco_per_image_dir),
+                    },
+                    "yolo": {
+                        "directory": str(yolo_dir),
+                        "images": str(yolo_images_root),
+                        "labels": str(yolo_labels_root),
+                        "data_yaml": str(yolo_yaml_path),
+                    },
+                    "visualizations": str(final_visualizations_dir),
+                    "segmentation_results": str(segmentation_results_dir),
+                }
+
 
         manifest_path = outputs_dir / "dataset_manifest.json"
         manifest_path.write_text(
@@ -6019,24 +6259,43 @@ def main() -> None:
     # detection map.
     coco_export_stage_start = time.perf_counter()
 
-    try:
-        coco_path, yolo_yaml_path = export_final_datasets(
-            config=config,
-            image_paths=image_paths,
-            final_detections_by_image=final_detections_by_image,
-        )
-    except Exception as exc:
-        logger.error(
-            "Final COCO/YOLO dataset export failed: {}",
-            exc,
-        )
-        failed_images.append(
-            (
-                "__DATASET_EXPORT__",
-                "COCO/YOLO Export",
-                str(exc),
+    if run_dataset_export:
+        try:
+            coco_path, yolo_yaml_path = export_final_datasets(
+                config=config,
+                image_paths=image_paths,
+                final_detections_by_image=final_detections_by_image,
             )
-        )
+        except Exception as exc:
+            logger.error(
+                "Final COCO/YOLO dataset export failed: {}",
+                exc,
+            )
+            failed_images.append(
+                (
+                    "__DATASET_EXPORT__",
+                    "COCO/YOLO Export",
+                    str(exc),
+                )
+            )
+            coco_path = (
+                config.paths.outputs
+                / "COCO_FORMAT"
+                / "annotations"
+                / "instances_final.json"
+            )
+            yolo_yaml_path = (
+                config.paths.outputs
+                / "YOLO_FORMAT"
+                / "data.yaml"
+            )
+        finally:
+            coco_export_stage_time = (
+                time.perf_counter()
+                - coco_export_stage_start
+            )
+    else:
+        coco_export_stage_time = 0.0
         coco_path = (
             config.paths.outputs
             / "COCO_FORMAT"
@@ -6048,10 +6307,80 @@ def main() -> None:
             / "YOLO_FORMAT"
             / "data.yaml"
         )
-    finally:
-        coco_export_stage_time = (
-            time.perf_counter()
-            - coco_export_stage_start
+        logger.info(
+            "Final COCO/YOLO dataset export skipped (--start-stage='{}').",
+            args.start_stage,
+        )
+
+    # ==============================================================
+    # YOLO TRAINING
+    # ==============================================================
+    # Training is intentionally the final processing stage. It starts only
+    # after the canonical COCO + YOLO datasets have been fully exported.
+    # The training script is loaded by exact filesystem path so SAM2's own
+    # ``training/train.py`` package cannot be imported accidentally.
+
+    if run_yolo_training:
+        yolo_training_stage_start = time.perf_counter()
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("YOLO TRAINING")
+        logger.info("=" * 80)
+
+        try:
+            if not yolo_yaml_path.is_file():
+                raise FileNotFoundError(
+                    f"YOLO data.yaml was not created: {yolo_yaml_path}"
+                )
+
+            train_yolo, training_file = load_project_yolo_trainer()
+
+            training_output_dir = (
+                config.paths.outputs
+                / "training"
+            )
+
+            logger.info(
+                "Using TraffCOCO YOLO training script: {}",
+                training_file,
+            )
+            logger.info(
+                "YOLO data.yaml: {}",
+                yolo_yaml_path,
+            )
+
+            train_yolo(
+                data_yaml=yolo_yaml_path,
+                output_dir=training_output_dir,
+            )
+
+            logger.info(
+                "YOLO training completed successfully. Output: {}",
+                training_output_dir,
+            )
+
+        except Exception as exc:
+            logger.error(
+                "YOLO training failed: {}",
+                exc,
+            )
+            failed_images.append(
+                (
+                    "__YOLO_TRAINING__",
+                    "YOLO Training",
+                    str(exc),
+                )
+            )
+
+        finally:
+            yolo_training_stage_time = (
+                time.perf_counter() - yolo_training_stage_start
+            )
+
+    else:
+        logger.info(
+            "YOLO training skipped (disabled by config or --start-stage)."
         )
 
     # ------------------------------------------------------------------
@@ -6103,6 +6432,7 @@ def main() -> None:
         + sam_segmentation_stage_time
         + final_output_stage_time
         + coco_export_stage_time
+        + yolo_training_stage_time
         + cleanup_stage_time
     )
 
@@ -6188,6 +6518,11 @@ def main() -> None:
     logger.info(
         "COCO Dataset Export Time        : {:.2f} s",
         coco_export_stage_time,
+    )
+
+    logger.info(
+        "YOLO Training Time              : {:.2f} s",
+        yolo_training_stage_time,
     )
 
     logger.info(
@@ -6388,14 +6723,17 @@ def main() -> None:
             annotation_engine.output_dir,
         )
 
-    logger.info(
-        "Final SAM 2 segmentation directory: {}",
-        config.paths.outputs / "segmentation",
-    )
-    logger.info(
-        "YOLOPv2 auxiliary output directory: {}",
-        config.paths.outputs / "yolopv2_segmentation",
-    )
+    if config.pipeline.run_segmentation:
+        logger.info(
+            "Final SAM 2 segmentation directory: {}",
+            config.paths.outputs / "segmentation",
+        )
+
+    if getattr(config.pipeline, "run_yolopv2", False):
+        logger.info(
+            "YOLOPv2 auxiliary output directory: {}",
+            config.paths.outputs / "yolopv2_segmentation",
+        )
     logger.info(
         "COCO dataset directory: {}",
         config.paths.outputs / "COCO_FORMAT",

@@ -1,16 +1,17 @@
-#!/usr/bin/env python3
+"""Utilities for validating TraffCOCO YOLO dataset YAML files."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 
-def load_dataset_yaml(data_yaml: str | Path) -> dict:
+def load_dataset_yaml(data_yaml: str | Path) -> dict[str, Any]:
     data_yaml = Path(data_yaml).resolve()
 
-    if not data_yaml.exists():
+    if not data_yaml.is_file():
         raise FileNotFoundError(
             f"Dataset YAML does not exist: {data_yaml}"
         )
@@ -22,7 +23,6 @@ def load_dataset_yaml(data_yaml: str | Path) -> dict:
         raise ValueError("Invalid YOLO dataset YAML.")
 
     required = {"train", "val", "names"}
-
     missing = required - data.keys()
 
     if missing:
@@ -33,9 +33,11 @@ def load_dataset_yaml(data_yaml: str | Path) -> dict:
     return data
 
 
-def get_dataset_root(data_yaml: str | Path, data: dict) -> Path:
+def get_dataset_root(
+    data_yaml: str | Path,
+    data: dict[str, Any],
+) -> Path:
     data_yaml = Path(data_yaml).resolve()
-
     root = Path(data.get("path", "."))
 
     if not root.is_absolute():
@@ -46,11 +48,10 @@ def get_dataset_root(data_yaml: str | Path, data: dict) -> Path:
 
 def resolve_split_path(
     data_yaml: str | Path,
-    data: dict,
+    data: dict[str, Any],
     split: str,
 ) -> Path:
     root = get_dataset_root(data_yaml, data)
-
     split_path = Path(data[split])
 
     if not split_path.is_absolute():
@@ -61,7 +62,7 @@ def resolve_split_path(
 
 def validate_split(
     data_yaml: str | Path,
-    data: dict,
+    data: dict[str, Any],
     split: str,
 ) -> None:
     if split not in data:
@@ -82,7 +83,7 @@ def validate_split(
         )
 
 
-def validate_dataset(data_yaml: str | Path) -> dict:
+def validate_dataset(data_yaml: str | Path) -> dict[str, Any]:
     data = load_dataset_yaml(data_yaml)
 
     for split in ("train", "val"):
@@ -101,9 +102,7 @@ def validate_dataset(data_yaml: str | Path) -> dict:
             for k in sorted(names, key=lambda x: int(x))
         ]
     else:
-        raise ValueError(
-            "'names' must be a list or dictionary."
-        )
+        raise ValueError("'names' must be a list or dictionary.")
 
     if not class_names:
         raise ValueError("No classes defined in dataset.")
