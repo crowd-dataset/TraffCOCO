@@ -203,7 +203,7 @@ This is implemented in `annotation_pipeline/pipeline/annotation.py`, which merge
 
 ### Runtime configuration
 
-The active runtime is driven by `default.config` and loaded via `annotation_pipeline/configs/settings.py`. Key flags include:
+The active runtime is driven by `config` and loaded via `annotation_pipeline/configs/settings.py`. Key flags include:
 
 - `download_random_frames`
 - `run_scene_understanding`

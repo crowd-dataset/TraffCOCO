@@ -1,0 +1,31 @@
+# TraffCOCO YOLO training configuration
+
+model:
+  # Replace with the model you actually want to train.
+  # Example:
+  # yolo26n.pt
+  path: yolo26n.pt
+
+dataset:
+  path: ../outputs/YOLO_FORMAT/data.yaml
+
+training:
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  workers: 8
+  patience: 20
+  seed: 42
+
+  # Set to null for automatic device selection.
+  # Examples:
+  # device: 0
+  # device: 1
+  # device: cpu
+  device: null
+
+output:
+  project: ./runs
+  name: traffcoco_yolo
+
+  cache: false

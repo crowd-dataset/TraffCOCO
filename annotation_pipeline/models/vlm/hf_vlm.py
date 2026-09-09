@@ -101,7 +101,7 @@ class HFVLM(BaseVLM):
     """
     Initialize the Hugging Face Vision-Language Model.
 
-    The configuration object is populated from default.config and
+    The configuration object is populated from config and
     contains every model-specific parameter required for loading and
     executing inference.
     """

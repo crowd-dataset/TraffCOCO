@@ -32,6 +32,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+from tqdm import tqdm
 
 from PIL import Image
 
@@ -146,29 +147,47 @@ class LocateAnythingEngine:
 
         locate_anything_batch_size = self.config.pipeline.locate_anything_batch_size
 
-        for batch_start in range(
-            0,
-            len(image_paths),
-            locate_anything_batch_size,
-        ):
+        total_batches = (
+            len(image_paths)
+            + locate_anything_batch_size
+            - 1
+        ) // locate_anything_batch_size
 
-            batch = image_paths[
-                batch_start:
-                batch_start + locate_anything_batch_size
-            ]
+        with tqdm(
+            total=total_batches,
+            desc="Locate Anything",
+            unit="batch",
+            dynamic_ncols=True,
+        ) as progress:
 
-            logger.info(
-                "Processing batch ({}/{})",
-                batch_start // locate_anything_batch_size + 1,
-                (len(image_paths) + locate_anything_batch_size - 1)
-                // locate_anything_batch_size,
-            )
+            for batch_start in range(
+                0,
+                len(image_paths),
+                locate_anything_batch_size,
+            ):
 
-            self._process_batch(
-                batch=batch,
-                cache=cache,
-            )
+                batch = image_paths[
+                    batch_start:
+                    batch_start + locate_anything_batch_size
+                ]
 
+                batch_number = (
+                    batch_start // locate_anything_batch_size
+                ) + 1
+
+                logger.info(
+                    "Processing batch ({}/{})",
+                    batch_number,
+                    total_batches,
+                )
+
+                self._process_batch(
+                    batch=batch,
+                    cache=cache,
+                )
+
+                progress.update(1)
+                
         self.last_grounding_time = (
             time.perf_counter() - start_time
         )

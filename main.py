@@ -58,6 +58,7 @@ import gc
 import shutil
 import re
 from typing import Any
+from tqdm import tqdm
 
 from custom_logger import CustomLogger
 from logmod import logs
@@ -2987,7 +2988,12 @@ def run_semantic_verification_stage(
                 detection,
                 index,
                 total,
-            ) in all_targets:
+            ) in tqdm(
+                all_targets,
+                desc="Semantic Verification: Gemma",
+                unit="obj",
+                dynamic_ncols=True,
+            ):
                 result = _run_semantic_gemma(
                     image_path=image_path,
                     detection=detection,
@@ -3067,7 +3073,12 @@ def run_semantic_verification_stage(
                     config=config,
                 )
 
-                for image_path, detection, scene_object in ontology_jobs:
+                for image_path, detection, scene_object in tqdm(
+                    ontology_jobs,
+                    desc="Semantic Verification: Ontology",
+                    unit="obj",
+                    dynamic_ncols=True,
+                ):
                     keep = _apply_semantic_ontology(
                         detection=detection,
                         scene_object=scene_object,
@@ -3112,7 +3123,12 @@ def run_semantic_verification_stage(
         # --------------------------------------------------------------
         # Final full-image rendering + diagnostics
         # --------------------------------------------------------------
-        for image_path in image_paths:
+        for image_path in tqdm(
+            image_paths,
+            desc="Semantic Verification: Finalize",
+            unit="img",
+            dynamic_ncols=True,
+        ):
             detections = detections_by_image.get(
                 image_path.name,
                 [],
@@ -3919,6 +3935,9 @@ def main() -> None:
         "Discovered {} image(s).",
         len(image_paths),
     )
+    logger.info(
+        "Progress bars are enabled for long-running pipeline stages."
+    )
 
     # ------------------------------------------------------------------
     # Initialize Pipeline Cache
@@ -4048,7 +4067,14 @@ def main() -> None:
 
         try:
 
-            for batch_start in range(0, len(image_paths), BATCH_SIZE):
+            scene_batch_progress = tqdm(
+                range(0, len(image_paths), BATCH_SIZE),
+                desc="Scene Understanding",
+                unit="batch",
+                dynamic_ncols=True,
+            )
+
+            for batch_start in scene_batch_progress:
 
                 batch = image_paths[
                     batch_start : batch_start + BATCH_SIZE
@@ -4209,7 +4235,12 @@ def main() -> None:
 
         total_objects = 0
 
-        for image_path in image_paths:
+        for image_path in tqdm(
+            image_paths,
+            desc="Ontology Reasoning",
+            unit="img",
+            dynamic_ncols=True,
+        ):
 
             try:
 
@@ -4446,9 +4477,16 @@ def main() -> None:
                 ),
             )
 
-            yolopv2_detections_by_image = (
-                yolopv2_engine.process_images(image_paths)
-            )
+            with tqdm(
+                total=1,
+                desc="YOLOPv2",
+                unit="stage",
+                dynamic_ncols=True,
+            ) as yolopv2_progress:
+                yolopv2_detections_by_image = (
+                    yolopv2_engine.process_images(image_paths)
+                )
+                yolopv2_progress.update(1)
 
             logger.info(
                 "YOLOPv2 completed successfully. Detection counts: {}",
@@ -4497,7 +4535,12 @@ def main() -> None:
 
         RETRY_THRESHOLD = 30
 
-        for image_path in image_paths:
+        for image_path in tqdm(
+            image_paths,
+            desc="Annotation + Postprocessing",
+            unit="img",
+            dynamic_ncols=True,
+        ):
 
             processed_count += 1
             retry_attempted = False
@@ -4922,7 +4965,12 @@ def main() -> None:
         logger.info("FUSING YOLOPv2 ROAD-USER DETECTIONS")
         logger.info("=" * 80)
 
-        for image_path in image_paths:
+        for image_path in tqdm(
+            image_paths,
+            desc="YOLOPv2 Fusion",
+            unit="img",
+            dynamic_ncols=True,
+        ):
             image_name = image_path.name
 
             la_final = final_detections_by_image.get(
@@ -5027,10 +5075,17 @@ def main() -> None:
             # SAM 2 is loaded, used, and unloaded entirely inside
             # process_images(), so it does not remain resident after the
             # final stage.
-            final_detections_by_image = sam_engine.process_images(
-                image_paths=image_paths,
-                detections_by_image=final_detections_by_image,
-            )
+            with tqdm(
+                total=1,
+                desc="SAM 2",
+                unit="stage",
+                dynamic_ncols=True,
+            ) as sam_progress:
+                final_detections_by_image = sam_engine.process_images(
+                    image_paths=image_paths,
+                    detections_by_image=final_detections_by_image,
+                )
+                sam_progress.update(1)
 
             # Update the authoritative final result metadata to point to
             # the SAM-segmented visualization.
@@ -5123,7 +5178,12 @@ def main() -> None:
     logger.info("FINAL COMBINED OUTPUT")
     logger.info("=" * 80)
 
-    for image_path in image_paths:
+    for image_path in tqdm(
+        image_paths,
+        desc="FINAL Visualizations",
+        unit="img",
+        dynamic_ncols=True,
+    ):
         image_name = image_path.name
         detections = final_detections_by_image.get(
             image_name,
@@ -5287,9 +5347,14 @@ def main() -> None:
 
         valid_image_paths: list[Path] = []
 
-        for image_path in sorted(
-            image_paths,
-            key=lambda path: path.name.lower(),
+        for image_path in tqdm(
+            sorted(
+                image_paths,
+                key=lambda path: path.name.lower(),
+            ),
+            desc="Dataset Export: Validate",
+            unit="img",
+            dynamic_ncols=True,
         ):
             if not image_path.exists():
                 logger.warning(
@@ -5415,7 +5480,12 @@ def main() -> None:
         image_id = 1
         annotation_id = 1
 
-        for image_path in valid_image_paths:
+        for image_path in tqdm(
+            valid_image_paths,
+            desc="Dataset Export: COCO + YOLO",
+            unit="img",
+            dynamic_ncols=True,
+        ):
             split = split_by_image[image_path.name]
 
             try:

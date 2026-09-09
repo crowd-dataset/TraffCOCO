@@ -4,7 +4,7 @@ settings.py
 Centralized configuration system for the KGFLM Traffic Annotation Pipeline.
 
 This module is responsible for loading the pipeline configuration from
-default.config and converting it into a strongly typed hierarchy of
+config and converting it into a strongly typed hierarchy of
 Python dataclasses.
 
 Rather than allowing every pipeline component to parse JSON files
@@ -66,7 +66,7 @@ logger = CustomLogger(__name__)
 # ============================================================================
 
 _DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parents[2] / "default.config"
+    Path(__file__).resolve().parents[2] / "config"
 )
 
 # ============================================================================
@@ -249,6 +249,7 @@ class PipelineParams:
     run_segmentation: bool
     run_annotation: bool
     run_semantic_verification: bool
+    run_yolo_training: bool
 
     save_intermediate_cache: bool
     save_pipeline_cache: bool
@@ -407,7 +408,7 @@ def load_config(
     Parameters
     ----------
     config_path
-        Optional path to default.config.
+        Optional path to config.
 
     project_root
         Optional override for the project root.
@@ -520,6 +521,7 @@ def load_config(
         run_segmentation=raw["run_segmentation"],
         run_annotation=raw["run_annotation"],
         run_semantic_verification=raw["run_semantic_verification"],
+        run_yolo_training=raw["run_yolo_training"],
 
         save_intermediate_cache=raw["save_intermediate_cache"],
         save_pipeline_cache=raw["save_pipeline_cache"],
