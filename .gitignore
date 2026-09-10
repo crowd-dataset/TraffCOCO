@@ -255,3 +255,4 @@ annotation_pipeline/outputs/
 tests/
 grounding_first/
 traffic_ontology_test.json
+dataset/

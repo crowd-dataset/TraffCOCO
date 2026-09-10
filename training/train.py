@@ -42,7 +42,6 @@ import json
 import os
 import socket
 import shutil
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,8 +51,6 @@ from ultralytics import YOLO
 
 
 RUN_NAME = "train"
-# Kept as the logical run name in training_state for compatibility. The
-# physical Ultralytics run directory is outputs/training itself.
 STATE_FILENAME = "training_state.json"
 LOCK_FILENAME = ".training.lock"
 CHECKPOINT_RELATIVE_PATH = Path("weights") / "last.pt"
@@ -287,7 +284,7 @@ def _mark_state(output_dir: Path, status: str) -> None:
 
 
 def _reset_training_run(output_dir: Path) -> None:
-    """Remove stale training artifacts while preserving the active lock."""
+    """Clear the canonical training directory while preserving the active lock."""
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
         return
@@ -299,43 +296,6 @@ def _reset_training_run(output_dir: Path) -> None:
             shutil.rmtree(path)
         else:
             path.unlink()
-
-
-
-def _ensure_pretrained_model(model_path: Path) -> Path:
-    """Ensure the configured pretrained model exists in training/pretrained."""
-    if model_path.is_file():
-        return model_path
-
-    if model_path.name != "yolo26n.pt":
-        raise FileNotFoundError(
-            f"Pretrained YOLO model does not exist: {model_path}. "
-            "Automatic download is only configured for yolo26n.pt."
-        )
-
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt"
-    temporary = model_path.with_suffix(model_path.suffix + ".download")
-
-    print(f"Pretrained model not found: {model_path}")
-    print(f"Downloading pretrained model from: {url}")
-
-    try:
-        urllib.request.urlretrieve(url, temporary)
-        if not temporary.is_file() or temporary.stat().st_size == 0:
-            raise RuntimeError("Downloaded pretrained model is empty.")
-        os.replace(temporary, model_path)
-    except Exception as exc:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        raise RuntimeError(
-            f"Failed to download pretrained model to {model_path}"
-        ) from exc
-
-    print(f"Pretrained model downloaded to: {model_path}")
-    return model_path
 
 
 def train_yolo(
@@ -359,10 +319,8 @@ def train_yolo(
         and restart from the configured pretrained model.
       * Existing artifacts without a checkpoint -> delete stale training
         artifacts and restart from the configured pretrained model.
-      * A valid interrupted state plus last.pt -> resume the exact checkpoint,
-        including optimizer/scheduler/scaler state, via Ultralytics resume=True.
-      * Dataset/config mismatch in a valid state -> fail instead of silently
-        mixing runs.
+      * Dataset/config mismatch in a valid state -> reset stale training
+        artifacts and start a fresh run from the configured pretrained model.
       * A run marked completed -> fail instead of silently restarting it.
     """
 
@@ -401,30 +359,6 @@ def train_yolo(
     ] if run_dir.exists() else []
     has_run_artifacts = bool(existing_artifacts)
 
-    # A stale/incomplete training directory is not a reason to get stuck.
-    # Once the lock is acquired below, it is safe to remove the old run and
-    # start again from the original pretrained model.
-    if state is not None:
-        _validate_resume_state(
-            state,
-            data_yaml=data_yaml,
-            model_name=model_name,
-            epochs=epochs,
-            imgsz=imgsz,
-            batch=batch,
-            workers=workers,
-            patience=patience,
-            seed=seed,
-        )
-
-    if state is not None and state.get("status") == "completed":
-        if best_checkpoint.is_file() or checkpoint.is_file():
-            raise RuntimeError(
-                f"TraffCOCO training is already marked completed in "
-                f"{state_path}. Refusing to restart it. Use a new output "
-                "directory for a separate training run."
-            )
-
     lock_path = _acquire_lock(output_dir)
 
     try:
@@ -446,17 +380,36 @@ def train_yolo(
             state = None
 
         if state is not None:
-            _validate_resume_state(
-                state,
-                data_yaml=data_yaml,
-                model_name=model_name,
-                epochs=epochs,
-                imgsz=imgsz,
-                batch=batch,
-                workers=workers,
-                patience=patience,
-                seed=seed,
-            )
+            try:
+                _validate_resume_state(
+                    state,
+                    data_yaml=data_yaml,
+                    model_name=model_name,
+                    epochs=epochs,
+                    imgsz=imgsz,
+                    batch=batch,
+                    workers=workers,
+                    patience=patience,
+                    seed=seed,
+                )
+            except RuntimeError as exc:
+                print(
+                    "Saved TraffCOCO training configuration/dataset does "
+                    "not match this request. Restarting YOLO training from "
+                    f"epoch 0/{epochs}.\n{exc}"
+                )
+                _reset_training_run(output_dir)
+                state = None
+
+        if state is not None and state.get("status") == "completed":
+            checkpoint = _checkpoint_path(output_dir)
+            best_checkpoint = run_dir / "weights" / "best.pt"
+            if best_checkpoint.is_file() or checkpoint.is_file():
+                raise RuntimeError(
+                    f"TraffCOCO training is already marked completed in "
+                    f"{state_path}. Refusing to restart it. Use a new output "
+                    "directory for a separate training run."
+                )
 
         checkpoint = _checkpoint_path(output_dir)
         run_dir = _run_dir(output_dir)
@@ -507,7 +460,11 @@ def train_yolo(
         if not model_path.is_absolute():
             model_path = PRETRAINED_DIR / model_path
 
-        model_path = _ensure_pretrained_model(model_path)
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"Pretrained YOLO model does not exist: {model_path}"
+            )
+
         model = YOLO(str(model_path))
 
         try:

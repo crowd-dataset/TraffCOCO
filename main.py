@@ -3859,6 +3859,49 @@ def load_project_yolo_trainer():
     return train_yolo, training_file
 
 
+def load_project_yolo_inference():
+    """Load TraffCOCO's own training/inference.py by exact file path."""
+
+    main_dir = Path(__file__).resolve().parent
+    candidates = (
+        main_dir / "training" / "inference.py",
+        main_dir.parent / "training" / "inference.py",
+    )
+
+    inference_file = next(
+        (candidate for candidate in candidates if candidate.is_file()),
+        None,
+    )
+
+    if inference_file is None:
+        raise FileNotFoundError(
+            "TraffCOCO YOLO inference script not found. Checked: "
+            + ", ".join(str(candidate) for candidate in candidates)
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "traffcoco_yolo_inference",
+        inference_file,
+    )
+
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Could not load TraffCOCO YOLO inference script: {inference_file}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    run_inference = getattr(module, "run_yolo_inference", None)
+    if not callable(run_inference):
+        raise AttributeError(
+            "TraffCOCO inference script does not define run_yolo_inference(): "
+            f"{inference_file}"
+        )
+
+    return run_inference, inference_file
+
+
 # ============================================================================
 # Main Pipeline
 # ============================================================================
@@ -3894,7 +3937,18 @@ def main() -> None:
         Semantic Verification (optional)
                 │
                 ▼
-        Final Visualization
+        Final COCO + YOLO Format Export
+                │
+                ▼
+        ==============================
+        TRAINING PHASE
+        ==============================
+                │
+                ▼
+        YOLO Training
+                │
+                ▼
+        YOLO Inference
     """
 
     # ------------------------------------------------------------------
@@ -3986,6 +4040,7 @@ def main() -> None:
             "final_output",
             "dataset_export",
             "yolo_training",
+            "yolo_inference",
         ),
         default=None,
         help=(
@@ -4024,6 +4079,7 @@ def main() -> None:
         "final_output",
         "dataset_export",
         "yolo_training",
+        "yolo_inference",
     )
 
     start_stage_index = (
@@ -4088,6 +4144,13 @@ def main() -> None:
         getattr(config.pipeline, "run_yolo_training", False)
         and stage_is_at_or_after("yolo_training")
     )
+    run_yolo_inference = (
+        run_yolo_training
+        and stage_is_at_or_after("yolo_inference")
+    )
+
+    if args.start_stage == "yolo_inference":
+        run_yolo_inference = True
 
     # Re-apply the stage-owned cleanup AFTER CLI overrides. This matters when
     # a CLI --no-* flag disables a stage that is enabled in JSON.
@@ -4110,6 +4173,12 @@ def main() -> None:
     if not run_final_output:
         shutil.rmtree(
             config.paths.outputs / "FINAL",
+            ignore_errors=True,
+        )
+
+    if not run_yolo_inference:
+        shutil.rmtree(
+            config.paths.outputs / "inference",
             ignore_errors=True,
         )
 
@@ -4196,7 +4265,14 @@ def main() -> None:
     final_output_stage_time = 0.0
     coco_export_stage_time = 0.0
     yolo_training_stage_time = 0.0
+    yolo_inference_stage_time = 0.0
     cleanup_stage_time = 0.0
+
+    annotation_phase_start = pipeline_start
+    annotation_phase_time = 0.0
+    training_phase_start = None
+    training_phase_time = 0.0
+    yolo_training_completed = False
 
     initialization_stage_start = pipeline_start
 
@@ -6313,12 +6389,48 @@ def main() -> None:
         )
 
     # ==============================================================
-    # YOLO TRAINING
+    # ANNOTATION PHASE COMPLETE
     # ==============================================================
-    # Training is intentionally the final processing stage. It starts only
-    # after the canonical COCO + YOLO datasets have been fully exported.
-    # The training script is loaded by exact filesystem path so SAM2's own
-    # ``training/train.py`` package cannot be imported accidentally.
+    # The VLM-first annotation pipeline is complete once the final COCO +
+    # YOLO datasets have been exported. YOLO training/inference begins only
+    # after this explicit phase boundary.
+
+    annotation_phase_time = time.perf_counter() - annotation_phase_start
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("ANNOTATION PHASE COMPLETE")
+    logger.info("=" * 80)
+    logger.info(
+        "VLM-first annotation pipeline completed through final COCO + YOLO format export."
+    )
+    logger.info(
+        "Annotation Phase Time         : {:.2f} s",
+        annotation_phase_time,
+    )
+    logger.info(
+        "COCO dataset                  : {}",
+        config.paths.outputs / "COCO_FORMAT",
+    )
+    logger.info(
+        "YOLO dataset                  : {}",
+        config.paths.outputs / "YOLO_FORMAT",
+    )
+    logger.info("=" * 80)
+
+    # ==============================================================
+    # TRAINING PHASE
+    # ==============================================================
+    # Everything after final COCO + YOLO export belongs to the training
+    # phase. The trained YOLO model is immediately used for inference when
+    # the training phase is enabled.
+
+    training_phase_start = time.perf_counter()
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING PHASE")
+    logger.info("=" * 80)
 
     if run_yolo_training:
         yolo_training_stage_start = time.perf_counter()
@@ -6355,6 +6467,8 @@ def main() -> None:
                 output_dir=training_output_dir,
             )
 
+            yolo_training_completed = True
+
             logger.info(
                 "YOLO training completed successfully. Output: {}",
                 training_output_dir,
@@ -6381,6 +6495,142 @@ def main() -> None:
     else:
         logger.info(
             "YOLO training skipped (disabled by config or --start-stage)."
+        )
+
+    # Training phase ends before YOLO inference begins.
+    training_phase_time = time.perf_counter() - training_phase_start
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING PHASE COMPLETE")
+    logger.info("=" * 80)
+    logger.info(
+        "Training Phase Time            : {:.2f} s",
+        training_phase_time,
+    )
+    logger.info(
+        "YOLO Training Time             : {:.2f} s",
+        yolo_training_stage_time,
+    )
+    logger.info(
+        "Trained Model                  : {}",
+        config.paths.outputs / "training" / "weights" / "best.pt",
+    )
+    logger.info("=" * 80)
+
+    # ==============================================================
+    # YOLO INFERENCE
+    # ==============================================================
+    # Inference always uses the trained model's canonical best checkpoint.
+    # It is kept in outputs/inference so training artifacts and inference
+    # artifacts remain separate.
+
+    if run_yolo_inference and (
+        yolo_training_completed or args.start_stage == "yolo_inference"
+    ):
+        yolo_inference_stage_start = time.perf_counter()
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("YOLO INFERENCE")
+        logger.info("=" * 80)
+
+        try:
+            run_inference, inference_file = load_project_yolo_inference()
+
+            trained_model_path = (
+                config.paths.outputs
+                / "training"
+                / "weights"
+                / "best.pt"
+            )
+
+            if not trained_model_path.is_file():
+                raise FileNotFoundError(
+                    f"Trained YOLO best.pt was not found: {trained_model_path}"
+                )
+
+            inference_dataset_dir = (
+                Path(__file__).resolve().parent / "dataset"
+            )
+            inference_images = sorted(
+                path
+                for path in inference_dataset_dir.rglob("*")
+                if path.is_file()
+                and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+            )
+
+            if not inference_images:
+                raise RuntimeError(
+                    f"No input images were found in the inference dataset directory: "
+                    f"{inference_dataset_dir}"
+                )
+
+            inference_output_dir = config.paths.outputs / "inference"
+            inference_output_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info(
+                "Using TraffCOCO YOLO inference script: {}",
+                inference_file,
+            )
+            logger.info(
+                "YOLO inference model: {}",
+                trained_model_path,
+            )
+            logger.info(
+                "YOLO inference source dataset: {}",
+                inference_dataset_dir,
+            )
+            logger.info(
+                "YOLO inference source images: {}",
+                len(inference_images),
+            )
+            logger.info(
+                "YOLO inference output: {}",
+                inference_output_dir,
+            )
+
+            inference_results = run_inference(
+                model_path=trained_model_path,
+                source=[str(path) for path in inference_images],
+                imgsz=640,
+                conf=config.pipeline.confidence_threshold,
+                project=inference_output_dir.parent,
+                name=inference_output_dir.name,
+                save_txt=True,
+                save_conf=True,
+            )
+
+            logger.info(
+                "YOLO inference completed successfully. Results: {} image(s).",
+                len(inference_results),
+            )
+
+        except Exception as exc:
+            logger.error(
+                "YOLO inference failed: {}",
+                exc,
+            )
+            failed_images.append(
+                (
+                    "__YOLO_INFERENCE__",
+                    "YOLO Inference",
+                    str(exc),
+                )
+            )
+
+        finally:
+            yolo_inference_stage_time = (
+                time.perf_counter() - yolo_inference_stage_start
+            )
+
+    elif run_yolo_inference:
+        logger.info(
+            "YOLO inference skipped because YOLO training did not complete successfully."
+        )
+    else:
+        logger.info(
+            "YOLO inference skipped (disabled by configuration or CLI)."
         )
 
     # ------------------------------------------------------------------
@@ -6416,6 +6666,20 @@ def main() -> None:
         - cleanup_stage_start
     )
 
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("INFERENCE COMPLETE")
+    logger.info("=" * 80)
+    logger.info(
+        "YOLO Inference Time            : {:.2f} s",
+        yolo_inference_stage_time,
+    )
+    logger.info(
+        "Inference Output               : {}",
+        config.paths.outputs / "inference",
+    )
+    logger.info("=" * 80)
+
     # Authoritative end-to-end wall-clock time. This includes setup,
     # input preparation, all enabled stages, retries, annotation,
     # postprocessing, visualization, semantic-input saving, and cleanup.
@@ -6433,6 +6697,7 @@ def main() -> None:
         + final_output_stage_time
         + coco_export_stage_time
         + yolo_training_stage_time
+        + yolo_inference_stage_time
         + cleanup_stage_time
     )
 
@@ -6443,64 +6708,57 @@ def main() -> None:
 
     logger.info("")
     logger.info("=" * 80)
-    logger.info("PIPELINE SUMMARY")
+    logger.info("ANNOTATION PHASE SUMMARY")
     logger.info("=" * 80)
 
     logger.info(
         "Images Processed              : {}",
         total_images,
     )
-
     logger.info(
         "Objects Processed             : {}",
         total_objects,
     )
-
+    logger.info(
+        "Annotation Phase Time         : {:.2f} s",
+        annotation_phase_time,
+    )
     logger.info(
         "Initialization/Input Time     : {:.2f} s",
         initialization_stage_time,
     )
-
     logger.info(
         "Scene Understanding Time      : {:.2f} s",
         scene_stage_time,
     )
-
     logger.info(
         "  └─ Generation Time           : {:.2f} s",
         total_generation_time,
     )
-
     logger.info(
         "Ontology Reasoning Time       : {:.2f} s",
         ontology_stage_time,
     )
-
     logger.info(
         "  └─ Reasoning Time            : {:.2f} s",
         total_reasoning_time,
     )
-
     logger.info(
         "Locate Anything Time          : {:.2f} s",
         grounding_stage_time,
     )
-
     logger.info(
         "  └─ Initial Grounding Time    : {:.2f} s",
         total_grounding_time,
     )
-
     logger.info(
         "Annotation + Retry + Postproc : {:.2f} s",
         annotation_stage_time,
     )
-
     logger.info(
         "Semantic Verification Time     : {:.2f} s",
         semantic_verification_stage_time,
     )
-
     logger.info(
         "SAM 2 Segmentation Time        : {:.2f} s",
         sam_segmentation_stage_time,
@@ -6509,96 +6767,95 @@ def main() -> None:
         "YOLOPv2 Auxiliary Time          : {:.2f} s",
         yolopv2_stage_time,
     )
-
     logger.info(
         "Final Combined Output Time      : {:.2f} s",
         final_output_stage_time,
     )
-
     logger.info(
         "COCO Dataset Export Time        : {:.2f} s",
         coco_export_stage_time,
     )
-
-    logger.info(
-        "YOLO Training Time              : {:.2f} s",
-        yolo_training_stage_time,
-    )
-
     logger.info(
         "  └─ Recovery Targets           : {}",
         semantic_target_count,
     )
-
     logger.info(
         "  └─ Recovered                  : {}",
         semantic_recovered_count,
     )
-
     logger.info(
         "  └─ Discarded / Unresolved     : {}",
         semantic_dropped_count,
     )
 
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING PHASE SUMMARY")
+    logger.info("=" * 80)
     logger.info(
-        "Final Resource Cleanup        : {:.2f} s",
+        "Training Phase Time            : {:.2f} s",
+        training_phase_time,
+    )
+    logger.info(
+        "YOLO Training Time             : {:.2f} s",
+        yolo_training_stage_time,
+    )
+    logger.info(
+        "Trained Model                  : {}",
+        config.paths.outputs / "training" / "weights" / "best.pt",
+    )
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("INFERENCE SUMMARY")
+    logger.info("=" * 80)
+    logger.info(
+        "YOLO Inference Time            : {:.2f} s",
+        yolo_inference_stage_time,
+    )
+    logger.info(
+        "Inference Output               : {}",
+        config.paths.outputs / "inference",
+    )
+    logger.info(
+        "Final Resource Cleanup         : {:.2f} s",
         cleanup_stage_time,
     )
 
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("PIPELINE SUMMARY")
+    logger.info("=" * 80)
     logger.info(
-        "Accounted Pipeline Time       : {:.2f} s",
-        accounted_pipeline_time,
+        "Annotation Phase Time         : {:.2f} s",
+        annotation_phase_time,
     )
-
     logger.info(
-        "Timing Measurement Gap        : {:.2f} s",
-        timing_gap,
+        "Training Phase Time           : {:.2f} s",
+        training_phase_time,
     )
-
     logger.info(
         "Total Pipeline Time           : {:.2f} s",
         pipeline_time,
     )
-
+    logger.info(
+        "Accounted Pipeline Time       : {:.2f} s",
+        accounted_pipeline_time,
+    )
+    logger.info(
+        "Timing Measurement Gap        : {:.2f} s",
+        timing_gap,
+    )
     if total_images:
-
         logger.info(
             "Average/Image                 : {:.2f} s",
             pipeline_time / total_images,
         )
-
         if pipeline_time > 0:
-
             logger.info(
                 "Images/Hour                   : {:.2f}",
                 3600 * total_images / pipeline_time,
             )
-    logger.info("")
-    logger.info("=" * 80)
-    logger.info("VLM-First Pipeline Complete")
-    logger.info("=" * 80)
-
-    if failed_images:
-
-        logger.warning(
-            "{} image(s) failed during processing.",
-            len(failed_images),
-        )
-
-        for image_name, stage, reason in failed_images:
-
-            logger.warning(
-                "    {} | Stage: {} | Reason: {}",
-                image_name,
-                stage,
-                reason,
-            )
-
-    else:
-
-        logger.info(
-            "All images processed successfully."
-        )
 
     # --------------------------------------------------------------
     # Successful annotation outputs
@@ -6773,6 +7030,12 @@ def main() -> None:
         / "YOLO_FORMAT"
         / "data.yaml",
     )
+
+    if run_yolo_inference:
+        logger.info(
+            "YOLO inference output directory: {}",
+            config.paths.outputs / "inference",
+        )
 
     logger.info(
         "FINAL visualizations directory: {}",

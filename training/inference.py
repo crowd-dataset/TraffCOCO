@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 from ultralytics import YOLO
 
@@ -11,6 +12,55 @@ from ultralytics import YOLO
 TRAINING_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL = TRAINING_DIR / "weights" / "best.pt"
 DEFAULT_PROJECT = TRAINING_DIR.parent / "outputs" / "inference"
+
+
+def run_yolo_inference(
+    model_path: Path | str,
+    source: str | Path | list[Path | str],
+    imgsz: int = 640,
+    conf: float = 0.25,
+    device: str | int | None = None,
+    project: Path | str = DEFAULT_PROJECT,
+    name: str = "predict",
+    batch: int = 1,
+    workers: int = 8,
+    save_txt: bool = False,
+    save_conf: bool = False,
+    stream: bool = False,
+) -> Any:
+    """Run YOLO inference using the supplied trained model and source."""
+    model_path = Path(model_path).resolve()
+    if not model_path.is_file():
+        raise FileNotFoundError(
+            f"YOLO model does not exist: {model_path}"
+        )
+
+    model = YOLO(str(model_path))
+
+    kwargs = {
+        "source": source,
+        "imgsz": imgsz,
+        "conf": conf,
+        "project": str(project),
+        "name": name,
+        "save": True,
+        "save_txt": save_txt,
+        "save_conf": save_conf,
+        "batch": batch,
+        "workers": workers,
+        "stream": stream,
+    }
+
+    if device is not None:
+        kwargs["device"] = device
+
+    results = model.predict(**kwargs)
+
+    if stream:
+        # Consume the generator so inference actually runs.
+        results = list(results)
+
+    return results
 
 
 def main() -> None:
@@ -54,37 +104,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model_path = Path(args.model).resolve()
-    if not model_path.is_file():
-        raise FileNotFoundError(
-            f"YOLO model does not exist: {model_path}"
-        )
-
-    model = YOLO(str(model_path))
-
-    kwargs = {
-        "source": args.source,
-        "imgsz": args.imgsz,
-        "conf": args.conf,
-        "project": args.project,
-        "name": args.name,
-        "save": True,
-        "save_txt": args.save_txt,
-        "save_conf": args.save_conf,
-        "batch": args.batch,
-        "workers": args.workers,
-        "stream": args.stream,
-    }
-
-    if args.device is not None:
-        kwargs["device"] = args.device
-
-    results = model.predict(**kwargs)
-
-    if args.stream:
-        # Consume the generator so inference actually runs.
-        for _ in results:
-            pass
+    run_yolo_inference(
+        model_path=args.model,
+        source=args.source,
+        imgsz=args.imgsz,
+        conf=args.conf,
+        device=args.device,
+        project=args.project,
+        name=args.name,
+        batch=args.batch,
+        workers=args.workers,
+        save_txt=args.save_txt,
+        save_conf=args.save_conf,
+        stream=args.stream,
+    )
 
 
 if __name__ == "__main__":

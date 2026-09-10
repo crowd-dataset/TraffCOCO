@@ -250,6 +250,7 @@ class PipelineParams:
     run_annotation: bool
     run_semantic_verification: bool
     run_yolo_training: bool
+    run_yolo_inference: bool
 
     save_intermediate_cache: bool
     save_pipeline_cache: bool
@@ -522,6 +523,7 @@ def load_config(
         run_annotation=raw["run_annotation"],
         run_semantic_verification=raw["run_semantic_verification"],
         run_yolo_training=raw["run_yolo_training"],
+        run_yolo_inference=raw["run_yolo_inference"],
 
         save_intermediate_cache=raw["save_intermediate_cache"],
         save_pipeline_cache=raw["save_pipeline_cache"],
