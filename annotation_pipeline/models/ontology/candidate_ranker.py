@@ -260,7 +260,36 @@ class CandidateRanker:
         # Exact semantic identity
         # ----------------------------------------------------------
 
-        if observed in identity_terms:
+        # An observation can exactly match a generic parent term without
+        # being evidence for a more specific child class.
+        #
+        # Example:
+        #   observed = "traffic light"
+        #   candidate = "traffic_light_arrow_right"
+        #
+        # "traffic light" establishes the object family, but it does not
+        # establish that the signal is a right-turn arrow. Do not award the
+        # exact-identity bonus in this parent -> subtype case.
+        observed_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                observed,
+            )
+        )
+        class_tokens = set(
+            re.findall(
+                r"[a-z0-9]+",
+                class_name,
+            )
+        )
+
+        is_parent_identity = (
+            observed != class_name
+            and observed_tokens
+            and observed_tokens.issubset(class_tokens)
+        )
+
+        if observed in identity_terms and not is_parent_identity:
 
             candidate.matched_attributes[
                 "class_identity"
@@ -270,6 +299,17 @@ class CandidateRanker:
             }
 
             return 0.15
+
+        if observed in identity_terms and is_parent_identity:
+            candidate.matched_attributes[
+                "class_identity"
+            ] = {
+                "type": "parent_only",
+                "observed": observed,
+                "candidate": class_name,
+            }
+
+            return 0.0
 
         # ----------------------------------------------------------
         # Token-level identity
@@ -1590,19 +1630,15 @@ class CandidateRanker:
     ) -> float:
         """Add a bounded direct bonus for explicit discriminative cues.
 
-        This supplements, rather than replaces, the existing evidence
-        fusion. The normalized attribute score can dilute a decisive
-        observation because class-specific cues are only one evidence
-        source among many.
+        Generic parent identity is deliberately not treated as a subtype cue.
+        For example, "traffic light" must not favor
+        ``traffic_light_arrow_right`` over ``traffic_light_off``.
 
-        Crucially, discriminative cues are derived from the candidate class
-        name, not from generic semantic metadata. A class such as
-        ``traffic_light_3_phase`` may mention red/green/yellow in its
-        metadata, but those colors do not make it a color-specific class.
-
-        A small direct bonus allows an explicitly observed state such as
-        "red lens visible" to influence the final ranking without
-        overwhelming the existing embedding and attribute evidence.
+        Explicit state evidence is extracted from the complete observation,
+        including the description. This is important because Scene
+        Understanding may leave structured attributes such as
+        ``primary_color`` as ``unknown`` while the description contains the
+        decisive visual evidence.
 
         Returns
         -------
@@ -1646,8 +1682,6 @@ class CandidateRanker:
             )
         )
 
-        # Generic parent terms are not discriminative because they occur
-        # across many related ontology classes.
         generic_tokens = {
             "traffic",
             "light",
@@ -1661,6 +1695,150 @@ class CandidateRanker:
             "class",
         }
 
+        # ----------------------------------------------------------
+        # Traffic-light state evidence
+        # ----------------------------------------------------------
+        #
+        # A description such as:
+        #   "no specific color is clearly illuminated"
+        #
+        # is strong evidence for traffic_light_off even though the
+        # structured color field may be "unknown".
+        #
+        # Conversely, explicit illuminated colors and arrow directions
+        # should only reward the matching sibling class.
+        #
+        # These are phrase-level cues because "not illuminated" cannot be
+        # represented reliably by simple token intersection.
+        state_patterns = {
+            "off": (
+                "off",
+                "turned off",
+                "turn off",
+                "not illuminated",
+                "no light illuminated",
+                "no lights illuminated",
+                "not lit",
+                "no light is illuminated",
+                "no lights are illuminated",
+                "no specific color illuminated",
+                "no specific color is illuminated",
+                "no specific color is clearly illuminated",
+                "no illuminated color",
+                "none illuminated",
+                "nothing illuminated",
+                "unlit",
+                "dark lenses",
+                "dark signal",
+                "signal is dark",
+            ),
+            "red": (
+                "red light",
+                "red lens",
+                "red signal",
+                "red illuminated",
+                "red is illuminated",
+                "red is lit",
+                "illuminated red",
+                "lit red",
+            ),
+            "green": (
+                "green light",
+                "green lens",
+                "green signal",
+                "green illuminated",
+                "green is illuminated",
+                "green is lit",
+                "illuminated green",
+                "lit green",
+            ),
+            "yellow": (
+                "yellow light",
+                "yellow lens",
+                "yellow signal",
+                "yellow illuminated",
+                "yellow is illuminated",
+                "yellow is lit",
+                "illuminated yellow",
+                "lit yellow",
+            ),
+            "amber": (
+                "amber light",
+                "amber lens",
+                "amber signal",
+                "amber illuminated",
+                "amber is illuminated",
+                "amber is lit",
+                "illuminated amber",
+                "lit amber",
+            ),
+            "arrow_right": (
+                "right arrow",
+                "right turn arrow",
+                "arrow pointing right",
+                "right-turn arrow",
+                "right turn signal",
+            ),
+            "arrow_left": (
+                "left arrow",
+                "left turn arrow",
+                "arrow pointing left",
+                "left-turn arrow",
+                "left turn signal",
+            ),
+        }
+
+        matched_states = []
+        for state, patterns in state_patterns.items():
+            if any(pattern in observed_evidence for pattern in patterns):
+                matched_states.append(state)
+
+        if matched_states:
+            class_state = None
+
+            if "traffic_light_off" in class_name:
+                class_state = "off"
+            elif "traffic_light_red" in class_name:
+                class_state = "red"
+            elif "traffic_light_green" in class_name:
+                class_state = "green"
+            elif "traffic_light_yellow" in class_name:
+                class_state = "yellow"
+            elif "traffic_light_amber" in class_name:
+                class_state = "amber"
+            elif "traffic_light_arrow_right" in class_name:
+                class_state = "arrow_right"
+            elif "traffic_light_arrow_left" in class_name:
+                class_state = "arrow_left"
+
+            if class_state in matched_states:
+                bonus = 0.15
+                candidate.matched_attributes[
+                    "discriminative_bonus"
+                ] = {
+                    "matched": [class_state],
+                    "source": "explicit_traffic_light_state_cue",
+                    "bonus": bonus,
+                }
+                return bonus
+
+            # An explicit sibling-state cue is negative evidence for a
+            # different traffic-light state. The direct bonus function only
+            # awards positive evidence; the normal negative-cue machinery
+            # handles ontology-provided negative cues.
+            if (
+                class_state is not None
+                and any(
+                    state != class_state
+                    for state in matched_states
+                )
+            ):
+                return 0.0
+
+        # ----------------------------------------------------------
+        # Generic class-name discriminative cues
+        # ----------------------------------------------------------
+
         class_cues = {
             token
             for token in class_tokens
@@ -1668,31 +1846,9 @@ class CandidateRanker:
             and len(token) > 1
         }
 
-        # IMPORTANT:
-        # Do not derive discriminative class-selection cues from ontology
-        # semantic metadata. Metadata often describes properties shared by
-        # the whole class family. For example, a 3-phase traffic light may
-        # legitimately list "red", "yellow", and "green" in its metadata,
-        # but those colors do NOT define the 3-phase class.
-        #
-        # The direct bonus therefore comes only from the ontology class name.
-        # Generic descriptive knowledge remains available to the normal
-        # attribute/evidence scorers above.
         if not class_cues:
             return 0.0
 
-        matched = sorted(
-            class_cues & observed_tokens,
-        )
-
-        if not matched:
-            return 0.0
-
-        # Keep the direct bonus limited to cues that commonly distinguish
-        # sibling ontology classes. Generic physical descriptors such as
-        # "head", "lens", "circular", and "mounted" must not become strong
-        # class-selection signals merely because an ontology entry mentions
-        # them.
         discriminative_tokens = {
             "red",
             "green",
@@ -1723,23 +1879,24 @@ class CandidateRanker:
             "mandatory",
         }
 
-        strong_matches = [
-            token
-            for token in matched
-            if token in discriminative_tokens
-        ]
+        strong_matches = sorted(
+            (
+                class_cues
+                & observed_tokens
+            )
+            & discriminative_tokens,
+        )
 
         if not strong_matches:
             return 0.0
 
-        # One explicit discriminative cue is sufficient for the full
-        # bounded bonus. Multiple matching cues do not stack without limit.
         bonus = 0.15
 
         candidate.matched_attributes[
             "discriminative_bonus"
         ] = {
             "matched": strong_matches,
+            "source": "class_name_cue",
             "bonus": bonus,
         }
 
