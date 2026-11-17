@@ -1085,29 +1085,46 @@ class AnnotationEngine:
             # Use ontology values, never Locate Anything's raw label.
             # --------------------------------------------------------
 
-            final_detections.append(
-                {
-                    "object_id": canonical_object_id,
-                    "bbox": bbox,
-                    "final_label": final_label,
-                    "class_name": class_name,
-                    "class_id": class_id,
-                    "grounding_prompt": grounding_prompt,
-                    "grounding_label": (
-                        grounding.get("object_name")
-                        or grounding.get("ref")
-                    ),
-                    "scene_confidence": self._get_scene_confidence(
-                        scene_object
-                    ),
-                    "ontology_score": self._get_ontology_score(
-                        scene_object
-                    ),
-                    "grounding_confidence": grounding.get(
-                        "grounding_confidence"
-                    ),
-                }
-            )
+            detection = {
+                "object_id": canonical_object_id,
+                "bbox": bbox,
+                "final_label": final_label,
+                "class_name": class_name,
+                "class_id": class_id,
+                "grounding_prompt": grounding_prompt,
+                "grounding_label": (
+                    grounding.get("object_name")
+                    or grounding.get("ref")
+                ),
+                "scene_confidence": self._get_scene_confidence(
+                    scene_object
+                ),
+                "ontology_score": self._get_ontology_score(
+                    scene_object
+                ),
+                "grounding_confidence": grounding.get(
+                    "grounding_confidence"
+                ),
+            }
+
+            # Sign text, language and meaning from Scene Understanding,
+            # and the class a text sign replaced (see sign_text.py).
+            ontology_reasoning = scene_object.get("ontology_reasoning")
+
+            if isinstance(ontology_reasoning, dict):
+                sign_text = ontology_reasoning.get("sign_text")
+
+                if isinstance(sign_text, dict) and sign_text.get("text"):
+                    detection["sign_text"] = dict(sign_text)
+
+                replaced = (
+                    ontology_reasoning.get("prediction") or {}
+                ).get("replaced_class")
+
+                if replaced:
+                    detection["alternative_labels"] = [replaced]
+
+            final_detections.append(detection)
 
             logger.debug(
                 "Final detection resolved: "
@@ -1120,6 +1137,22 @@ class AnnotationEngine:
                 class_id,
                 bbox,
             )
+
+        # Sign text describes ONE sign. When the grounding query of a
+        # described sign returns several boxes (e.g. "large billboard"
+        # matching every board in view), it is unknown which box carries
+        # that text, so it is attached to none of them.
+        boxes_per_sign: dict[Any, int] = {}
+
+        for detection in final_detections:
+            if detection.get("sign_text"):
+                key = detection.get("object_id")
+                boxes_per_sign[key] = boxes_per_sign.get(key, 0) + 1
+
+        for detection in final_detections:
+            if boxes_per_sign.get(detection.get("object_id"), 0) > 1:
+                detection.pop("sign_text", None)
+                detection["sign_text_unassigned"] = True
 
         resolved_count = sum(
             1 for d in final_detections if d.get("class_name")

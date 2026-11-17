@@ -86,6 +86,9 @@ from annotation_pipeline.pipeline.locate_anything import (
     LocateAnythingEngine,
 )
 from annotation_pipeline.pipeline.annotation import AnnotationEngine
+from annotation_pipeline.pipeline.deduplication import (
+    deduplicate_detections_by_image,
+)
 from annotation_pipeline.prompts.load_prompt import load_prompt
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
@@ -93,6 +96,13 @@ from annotation_pipeline.models.segmentation.sam2_segmenter import (
     SAM2SegmentationEngine,
 )
 from annotation_pipeline.models.yolopv2 import YOLOPv2SegmentationEngine
+from annotation_pipeline.models.segmentation.surface_segmenter import (
+    SurfaceSegmenter,
+    export_surface_coco,
+    load_surface_classes,
+    overlay_surfaces,
+    surface_mask_path,
+)
 
 logger = CustomLogger(__name__)
 
@@ -909,11 +919,17 @@ def remove_redundant_contained_detections(
     image_path: Path,
     detections: list[dict],
 ) -> list[dict]:
-    """Remove smaller detections fully contained inside larger detections.
+    """Remove smaller detections fully contained inside a larger detection
+    of the SAME class.
 
-    This applies across ALL classes. A class/superclass match is not required.
-    Partial overlaps are preserved. When one valid bbox is completely inside
-    another and is smaller, the smaller detection is discarded.
+    A smaller box of the same class inside a larger one is a repeated
+    detection of part of the same thing. A box of a different class inside
+    a larger one is usually a separate object standing on or in front of
+    it: posts on a hatched area, a car on the road, a pedestrian on a
+    crosswalk, a sign in front of a building. Applying the rule across all
+    classes removed those (all orange posts in a Japanese test frame,
+    2026-11-18), so it is limited to equal classes. Partial overlaps are
+    preserved.
     """
 
     if len(detections) < 2:
@@ -974,6 +990,11 @@ def remove_redundant_contained_detections(
 
             # Only the smaller box is discarded.
             if inner_area >= outer_area:
+                continue
+
+            if _detection_class(inner_detection) != _detection_class(
+                outer_detection
+            ):
                 continue
 
             if _bbox_fully_inside(
@@ -1539,22 +1560,24 @@ def limit_detections_per_superclass(
 def postprocess_detections(
     image_path: Path,
     detections: list[dict],
-    min_area_ratio: float = 0.005,
+    min_side_px: float = 6.0,
+    min_area_px: float = 64.0,
     max_area_ratio: float = 0.30,
     max_width_ratio: float = 0.90,
     max_height_ratio: float = 0.50,
-    tiny_width_ratio: float = 0.02,
-    tiny_height_ratio: float = 0.06,
     max_aspect_ratio: float = 10.0,
     min_aspect_ratio: float = 0.10,
     max_per_superclass: int = 10,
 ) -> list[dict]:
     """Remove only geometrically implausible detections.
 
-    Small-object filtering is intentionally conservative: a detection is
-    removed as tiny only when its area is below ``min_area_ratio`` and both
-    dimensions are also below their tiny-object limits. This protects
-    legitimate thin or distant objects.
+    Small-object filtering uses absolute pixel limits: a detection is
+    removed as tiny only when its shorter side is below ``min_side_px`` or
+    its area is below ``min_area_px``. Limits relative to the image size
+    (the earlier rule: under 0.5% of the area, 2% of the width and 6% of the
+    height, i.e. about 25 x 43 px at 1280 x 720) removed every distant
+    traffic light, most traffic signs and distant cars and pedestrians
+    (Spark test, 2026-11-18).
 
     Oversized detections are removed when their area exceeds
     ``max_area_ratio``, or when both their width and height exceed the
@@ -1654,9 +1677,8 @@ def postprocess_detections(
         # ==============================================================
 
         too_small = (
-            area_ratio < min_area_ratio
-            and width_ratio < tiny_width_ratio
-            and height_ratio < tiny_height_ratio
+            min(bbox_width, bbox_height) < min_side_px
+            or bbox_area < min_area_px
         )
 
         # ==============================================================
@@ -1734,13 +1756,11 @@ def postprocess_detections(
 
             logger.warning(
                 "Postprocessing removed tiny detection "
-                "'{}' from '{}': "
-                "area={:.4f}% width={:.2f}% height={:.2f}%",
+                "'{}' from '{}': {:.0f} x {:.0f} px",
                 class_name,
                 image_path.name,
-                area_ratio * 100,
-                width_ratio * 100,
-                height_ratio * 100,
+                bbox_width,
+                bbox_height,
             )
 
             continue
@@ -3640,6 +3660,12 @@ def _final_display_label(detection: dict) -> str:
     if normalized in {"unknown vehicle", "unidentified", "unidentified vehicle"}:
         return "unidentified vehicle"
 
+    sign_text = detection.get("sign_text")
+    if label and isinstance(sign_text, dict):
+        said = sign_text.get("meaning") or sign_text.get("text")
+        if said:
+            return f"{label}: {said}"
+
     return label or "unidentified vehicle"
 
 
@@ -3718,6 +3744,44 @@ def _draw_final_detections(
     return rendered
 
 
+def _coco_images_for_surfaces(
+    coco_path: Path,
+    image_paths: list[Path],
+) -> list[dict[str, Any]]:
+    """COCO image entries for the surface export, sharing the object
+    file's ids; images without objects get new ids after the last one."""
+
+    images: list[dict[str, Any]] = []
+
+    if Path(coco_path).exists():
+        images = list(
+            json.loads(Path(coco_path).read_text(encoding="utf-8")).get(
+                "images",
+                [],
+            )
+        )
+
+    known = {Path(image["file_name"]).stem for image in images}
+    next_id = max((int(image["id"]) for image in images), default=0) + 1
+
+    for image_path in image_paths:
+        if image_path.stem in known:
+            continue
+
+        with Image.open(image_path) as image:
+            width, height = image.size
+
+        images.append({
+            "id": next_id,
+            "file_name": image_path.name,
+            "width": width,
+            "height": height,
+        })
+        next_id += 1
+
+    return images
+
+
 def create_final_output(
     config: Any,
     image_path: Path,
@@ -3787,6 +3851,13 @@ def create_final_output(
         base,
         lane_mask_path,
         (255, 210, 60, 180),
+    )
+
+    # Road surfaces and roadside structure (surface segmentation stage).
+    base = overlay_surfaces(
+        base,
+        surface_mask_path(config.paths.outputs, stem),
+        load_surface_classes(config.paths.outputs),
     )
 
     # Draw the authoritative final fused detections last, so labels/boxes
@@ -4043,6 +4114,7 @@ def main() -> None:
             "annotation",
             "semantic_verification",
             "sam2",
+            "surface_segmentation",
             "final_output",
             "dataset_export",
             "yolo_training",
@@ -4082,6 +4154,7 @@ def main() -> None:
         "annotation",
         "semantic_verification",
         "sam2",
+        "surface_segmentation",
         "final_output",
         "dataset_export",
         "yolo_training",
@@ -4137,6 +4210,9 @@ def main() -> None:
 
     if not stage_is_at_or_after("sam2"):
         object.__setattr__(config.pipeline, "run_segmentation", False)
+
+    if not stage_is_at_or_after("surface_segmentation"):
+        object.__setattr__(config.pipeline, "run_surface_segmentation", False)
 
     # --start-stage final_output also suppresses dataset export until the
     # final output block has completed. The exporter remains enabled whenever
@@ -4268,6 +4344,7 @@ def main() -> None:
     semantic_verification_stage_time = 0.0
     sam_segmentation_stage_time = 0.0
     yolopv2_stage_time = 0.0
+    surface_stage_time = 0.0
     final_output_stage_time = 0.0
     coco_export_stage_time = 0.0
     yolo_training_stage_time = 0.0
@@ -4908,6 +4985,18 @@ def main() -> None:
                     or len(final_detections) > RETRY_THRESHOLD
                 )
 
+                # A run resumed with --start-stage annotation (or later)
+                # has no Locate Anything model loaded; keep the existing
+                # grounding instead of failing the image.
+                if needs_grounding_retry and grounding_engine is None:
+                    logger.warning(
+                        "Locate Anything retry for '{}' skipped: grounding "
+                        "is not loaded in a run resumed after the "
+                        "grounding stage.",
+                        image_path.name,
+                    )
+                    needs_grounding_retry = False
+
                 if (
                     needs_grounding_retry
                     and not retry_attempted
@@ -5352,6 +5441,10 @@ def main() -> None:
                         fallback_detections
                     )
 
+            # Several scene objects often ground to the same physical
+            # object; segment and export each object once.
+            deduplicate_detections_by_image(final_detections_by_image)
+
             sam_input_counts = {
                 image_path.name: len(
                     final_detections_by_image.get(image_path.name, [])
@@ -5457,6 +5550,87 @@ def main() -> None:
     else:
         logger.info(
             "Final SAM 2 segmentation skipped (run_segmentation=false)."
+        )
+
+    # ==============================================================
+    # SURFACE SEGMENTATION (road, sidewalk, curb, crosswalk, ...)
+    # ==============================================================
+    # Per-pixel labels for the regions the object chain cannot box.
+    # Written to outputs/surface_segmentation and used by the FINAL
+    # image and the surfaces_final.json COCO-Stuff export.
+    if getattr(config.pipeline, "run_surface_segmentation", False):
+
+        surface_stage_start = time.perf_counter()
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("SURFACE SEGMENTATION")
+        logger.info("=" * 80)
+
+        surface_segmenter = SurfaceSegmenter(
+            model_id=config.models.surface_segmentation_model_id,
+            classes=config.models.surface_segmentation_classes,
+            max_side=config.models.surface_segmentation_max_side,
+        )
+
+        try:
+            surface_segmenter.load()
+
+            for image_path in tqdm(
+                image_paths,
+                desc="Surface Segmentation",
+                unit="img",
+                dynamic_ncols=True,
+            ):
+                try:
+                    label_map = surface_segmenter.segment(image_path)
+                    surface_segmenter.save(
+                        label_map,
+                        image_path,
+                        config.paths.outputs,
+                        save_overlay=config.pipeline.save_visualizations,
+                    )
+                    logger.info(
+                        "Surface segmentation for '{}': {:.2f} s, {:.0%} "
+                        "of pixels labelled.",
+                        image_path.name,
+                        surface_segmenter.last_inference_time,
+                        float((label_map > 0).mean()),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Surface segmentation failed for '{}': {}",
+                        image_path.name,
+                        exc,
+                    )
+                    failed_images.append(
+                        (
+                            image_path.name,
+                            "Surface Segmentation",
+                            str(exc),
+                        )
+                    )
+
+        except Exception as exc:
+            logger.error(
+                "Surface segmentation model failed to load: {}",
+                exc,
+            )
+            failed_images.append(
+                (
+                    "__SURFACE_SEGMENTATION__",
+                    "Surface Segmentation",
+                    str(exc),
+                )
+            )
+
+        finally:
+            surface_segmenter.unload()
+            surface_stage_time = time.perf_counter() - surface_stage_start
+
+    else:
+        logger.info(
+            "Surface segmentation skipped (run_surface_segmentation=false)."
         )
 
     if run_final_output:
@@ -5938,6 +6112,22 @@ def main() -> None:
                 if sam_score is not None:
                     annotation["sam_score"] = float(sam_score)
 
+                # Sign text in its own script, language and meaning, so
+                # a sign in any language keeps what it says.
+                sign_text = detection.get("sign_text")
+                if isinstance(sign_text, dict) and sign_text.get("text"):
+                    annotation["attributes"] = {
+                        key: str(sign_text[key])
+                        for key in ("text", "language", "meaning")
+                        if sign_text.get(key)
+                    }
+
+                if detection.get("alternative_labels"):
+                    annotation["alternative_labels"] = [
+                        str(label)
+                        for label in detection["alternative_labels"]
+                    ]
+
                 coco_annotations_by_split[split].append(annotation)
                 per_image_annotations.append(annotation)
 
@@ -6356,11 +6546,30 @@ def main() -> None:
 
     if run_dataset_export:
         try:
+            # Also covers runs without SAM 2 (idempotent after it).
+            deduplicate_detections_by_image(final_detections_by_image)
+
             coco_path, yolo_yaml_path = export_final_datasets(
                 config=config,
                 image_paths=image_paths,
                 final_detections_by_image=final_detections_by_image,
             )
+
+            if load_surface_classes(config.paths.outputs):
+                surface_counts = export_surface_coco(
+                    outputs_dir=config.paths.outputs,
+                    coco_images=_coco_images_for_surfaces(
+                        coco_path,
+                        image_paths,
+                    ),
+                    out_path=coco_path.parent / "surfaces_final.json",
+                )
+                logger.info(
+                    "Surface COCO-Stuff export: {} image(s), {} mask(s) -> {}",
+                    surface_counts["images"],
+                    surface_counts["annotations"],
+                    coco_path.parent / "surfaces_final.json",
+                )
         except Exception as exc:
             logger.error(
                 "Final COCO/YOLO dataset export failed: {}",
@@ -6713,6 +6922,7 @@ def main() -> None:
         + semantic_verification_stage_time
         + yolopv2_stage_time
         + sam_segmentation_stage_time
+        + surface_stage_time
         + final_output_stage_time
         + coco_export_stage_time
         + yolo_training_stage_time
@@ -6785,6 +6995,10 @@ def main() -> None:
     logger.info(
         "YOLOPv2 Auxiliary Time          : {:.2f} s",
         yolopv2_stage_time,
+    )
+    logger.info(
+        "Surface Segmentation Time       : {:.2f} s",
+        surface_stage_time,
     )
     logger.info(
         "Final Combined Output Time      : {:.2f} s",

@@ -68871,6 +68871,171 @@
         "geographic_context"
       ],
       "grounding_prompt": "kangaroo on road"
+    },
+    {
+      "class_id": "C155",
+      "class_name": "guide_information_sign",
+      "country": "Global",
+      "traffic_standard": null,
+      "super_category": "traffic_sign",
+      "parent_category": "traffic_sign",
+      "description": "Traffic sign whose message is written text in any language: direction, route guidance, lane or turn guidance at the next signal, place names, distances, warnings or instructions spelled out in words.",
+      "purpose": "Represent text-based guide and information signs; the sign's text, language and meaning are stored as attributes of the annotation.",
+      "visual_attributes": {
+        "typical_shapes": [
+          "rectangle"
+        ],
+        "typical_colors": [
+          "blue",
+          "green",
+          "white",
+          "brown",
+          "yellow"
+        ],
+        "border_color": [
+          "varied"
+        ],
+        "background_color": [
+          "blue",
+          "green",
+          "white",
+          "brown"
+        ],
+        "text_color": [
+          "white",
+          "black"
+        ],
+        "material": [
+          "metal",
+          "aluminum",
+          "retroreflective sheeting"
+        ],
+        "reflective": true,
+        "visual_characteristics": [
+          "rectangular board carrying written text"
+        ]
+      },
+      "text_information": {
+        "common_text": [
+          "written words in the local language"
+        ],
+        "languages": [
+          "any"
+        ],
+        "common_symbols": [
+          "text",
+          "destination",
+          "direction",
+          "guidance"
+        ]
+      },
+      "installation": {
+        "mounted_on": [
+          "post",
+          "pole",
+          "gantry",
+          "wall"
+        ],
+        "orientation": "vertical",
+        "typical_height": "varied"
+      },
+      "context": {
+        "typical_location": [
+          "roadside",
+          "intersection",
+          "urban road",
+          "highway"
+        ],
+        "road_types": [
+          "urban",
+          "highway",
+          "rural"
+        ],
+        "urban_rural": [
+          "urban",
+          "suburban",
+          "rural"
+        ],
+        "frequently_nearby_objects": [
+          "streetlight",
+          "road_marking",
+          "sign_post",
+          "pole",
+          "car",
+          "pedestrian"
+        ]
+      },
+      "relationships": {
+        "parent": "traffic_sign",
+        "children": [],
+        "related_classes": [],
+        "common_confusions": []
+      },
+      "semantic_information": {
+        "keywords": [
+          "guide sign",
+          "information sign",
+          "direction sign",
+          "text sign"
+        ],
+        "synonyms": [
+          "direction sign",
+          "destination sign",
+          "informational road sign",
+          "text road sign"
+        ],
+        "aliases": [
+          "guide sign",
+          "information sign"
+        ]
+      },
+      "inference_cues": {
+        "likely_descriptions": [
+          "rectangular sign with text",
+          "blue sign with white text",
+          "green direction sign with place names",
+          "sign with text in local language",
+          "guide sign showing next signal turn instruction"
+        ]
+      },
+      "example_images": [],
+      "sources": {
+        "from_taxonomy": [
+          "Category - traffic_sign"
+        ],
+        "inferred": [
+          "Added 2026-11-18 for text-based signs whose words the pictogram classes cannot represent"
+        ],
+        "traffic_standard": "Global"
+      },
+      "object_type": "traffic_sign",
+      "embedding_text": "The guide information sign is a road sign that communicates its message mainly through written words, in any language or script, such as directions, destinations, distances, lane guidance, turn instructions at the next traffic signal or general information. It is usually rectangular, often blue, green or white, and mounted on a post, pole, gantry or wall.",
+      "distinctive_features": [
+        "Message is written text",
+        "Readable words in any language or script",
+        "Usually rectangular board",
+        "Direction, guidance or information rather than a single pictogram"
+      ],
+      "common_confusions": [],
+      "negative_cues": [
+        "Do not use for signs whose meaning is a standard pictogram or symbol",
+        "Do not use when the text cannot be read (use unreadable_traffic_sign)"
+      ],
+      "attribute_importance": {
+        "shape": 2,
+        "color": 2,
+        "text": 3,
+        "symbol": 1,
+        "context": 2,
+        "location": 2
+      },
+      "detection_priority": [
+        "presence_of_sign_board",
+        "sign_shape",
+        "sign_location",
+        "mounting_structure"
+      ],
+      "grounding_prompt": "rectangular road sign with text"
     }
   ],
   "upgrade_notes": "Version 2.1: Updated from expanded taxonomy Markdown. Added 167 new classes. Updated descriptions for stop_sign, yield_sign, speed_limit_sign, end_speed_limit_sign, guardrail, streetlight, delineator_post. Added traffic signal aspect classes (D012-D039), new road markings (E018-E031), new infrastructure (F016-F027), and country-specific signs/vehicles (I021-I085). | v2.1 enrichment pass: expanded shapes, normalized colors, expanded materials, enriched synonyms/aliases/keywords, rebuilt inference_cues, rebuilt embedding_text for all 412 classes using VLM-compatible natural language. | v2.2 fact-check audit pass: reviewed all 413 classes against authoritative sources where available; 44 corrections applied (visual, factual, terminology, semantic-scope, and data-integrity fixes); 4 duplicate class pairs flagged for merge (I001/I078, I013/C063, F009/F019, H001/I084); 2 missing-class gaps flagged (no US-style speed-limit-sign class; taxi/london_black_cab overlap); 1 entry flagged for manual review pending a primary source (Cuba stop sign). See accompanying audit report for full detail and per-class evidence/confidence."

@@ -203,6 +203,13 @@ class OntologyIndex:
 
             self.config.paths.ontology_metadata.exists()
 
+            and
+
+            # A saved index older than the ontology misses edited or
+            # added classes; rebuild it instead of loading it.
+            self.config.paths.ontology_index.stat().st_mtime
+            >= self.config.paths.ontology_file.stat().st_mtime
+
         ):
 
             logger.info(

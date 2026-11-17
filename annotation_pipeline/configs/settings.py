@@ -171,6 +171,15 @@ class ModelsConfig:
 
     sam2_model_id: str
 
+    # Semantic segmentation of road surfaces and roadside structure
+    # (road, sidewalk, curb, crosswalk, bike lane, ...). Empty
+    # surface_segmentation_classes means the built-in default list.
+    surface_segmentation_model_id: str = (
+        "facebook/mask2former-swin-large-mapillary-vistas-semantic"
+    )
+    surface_segmentation_classes: tuple = ()
+    surface_segmentation_max_side: int = 1280
+
 # ============================================================================
 # Logging
 # ============================================================================
@@ -267,6 +276,8 @@ class PipelineParams:
 
     benchmark: bool
     supported_image_extensions: list
+
+    run_surface_segmentation: bool = False
 
 # ============================================================================
 # Pipeline Configuration
@@ -503,6 +514,17 @@ def load_config(
         locate_anything_model_id=raw["grounding"]["locate_anything_model_id"],
 
         sam2_model_id=raw["segmentation"]["sam2_model_id"],
+
+        surface_segmentation_model_id=raw.get("surface_segmentation", {}).get(
+            "model_id",
+            "facebook/mask2former-swin-large-mapillary-vistas-semantic",
+        ),
+        surface_segmentation_classes=tuple(
+            raw.get("surface_segmentation", {}).get("classes", [])
+        ),
+        surface_segmentation_max_side=int(
+            raw.get("surface_segmentation", {}).get("max_side", 1280)
+        ),
     )
 
     # ----------------------------------------------------------------------
@@ -540,6 +562,8 @@ def load_config(
 
         benchmark=raw["benchmark"],
         supported_image_extensions=(".png", ".jpg", ".jpeg", ".webp"),
+
+        run_surface_segmentation=raw.get("run_surface_segmentation", False),
     )
 
     # ----------------------------------------------------------------------

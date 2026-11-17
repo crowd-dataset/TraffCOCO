@@ -208,9 +208,38 @@ class SceneUnderstandingEngine:
             # Parse JSON
             # ----------------------------------------------------------
 
-            objects = self._parse_json_response(
-                raw_response,
-            )
+            # One unparseable answer must not discard the other images
+            # of the batch. The image gets no parsed file, so later
+            # stages report it as failed on its own.
+            try:
+                objects = self._parse_json_response(
+                    raw_response,
+                )
+            except ValueError as exc:
+                logger.error(
+                    "Scene Understanding failed for '{}': {}",
+                    image_name,
+                    exc,
+                )
+                all_objects.append([])
+                continue
+
+            # ----------------------------------------------------------
+            # Limit object count (before saving, so the parsed file
+            # that Ontology Reasoning reads matches the cache)
+            # ----------------------------------------------------------
+
+            max_objects = self.config.pipeline.max_objects_per_image
+
+            if len(objects) > max_objects:
+
+                logger.warning(
+                    "Model returned {} objects. Truncating to {}.",
+                    len(objects),
+                    max_objects,
+                )
+
+                objects = objects[:max_objects]
 
             parsed_file = parsed_dir / f"{image_path.stem}.json"
 
@@ -236,22 +265,6 @@ class SceneUnderstandingEngine:
                 "Parsed {} object(s).",
                 len(objects),
             )
-
-            # ----------------------------------------------------------
-            # Limit object count
-            # ----------------------------------------------------------
-
-            max_objects = self.config.pipeline.max_objects_per_image
-
-            if len(objects) > max_objects:
-
-                logger.warning(
-                    "Model returned {} objects. Truncating to {}.",
-                    len(objects),
-                    max_objects,
-                )
-
-                objects = objects[:max_objects]
 
             # ----------------------------------------------------------
             # Cache
@@ -356,6 +369,38 @@ class SceneUnderstandingEngine:
     # -------------------------------------------------------------------------
     # JSON Parsing
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _recover_truncated_array(
+        response: str,
+    ) -> list[Any]:
+        """Return the complete elements of a JSON array cut off mid-way."""
+
+        start = response.find("[")
+
+        if start == -1:
+            return []
+
+        decoder = json.JSONDecoder()
+        objects: list[Any] = []
+        pos = start + 1
+
+        while True:
+
+            while pos < len(response) and response[pos] in " \t\r\n,":
+                pos += 1
+
+            if pos >= len(response) or response[pos] == "]":
+                break
+
+            try:
+                obj, pos = decoder.raw_decode(response, pos)
+            except json.JSONDecodeError:
+                break
+
+            objects.append(obj)
+
+        return objects
 
     def _parse_json_response(
         self,
@@ -465,18 +510,31 @@ class SceneUnderstandingEngine:
 
         except json.JSONDecodeError as exc:
 
-            logger.error(
-                "Failed to parse Scene Understanding JSON."
-            )
+            # The model may stop mid-array when it hits max_new_tokens
+            # (e.g. when it starts repeating objects). Keep every
+            # complete object before the cut instead of dropping all.
+            objects = self._recover_truncated_array(response)
 
-            logger.debug(
-                "Invalid JSON:\n{}",
-                json_text,
-            )
+            if not objects:
 
-            raise ValueError(
-                "Failed to parse Scene Understanding output."
-            ) from exc
+                logger.error(
+                    "Failed to parse Scene Understanding JSON."
+                )
+
+                logger.debug(
+                    "Invalid JSON:\n{}",
+                    json_text,
+                )
+
+                raise ValueError(
+                    "Failed to parse Scene Understanding output."
+                ) from exc
+
+            logger.warning(
+                "Scene Understanding JSON was truncated. Recovered {} "
+                "complete object(s).",
+                len(objects),
+            )
 
         # ------------------------------------------------------------------
         # Normalize output
