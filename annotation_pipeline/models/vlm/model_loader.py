@@ -26,6 +26,7 @@ from annotation_pipeline.configs.settings import PipelineConfig
 
 from annotation_pipeline.models.vlm.gemma import GemmaVL
 from annotation_pipeline.models.vlm.gemma4 import Gemma4VL
+from annotation_pipeline.models.vlm.qwen import QwenVL
 from annotation_pipeline.models.vlm.smolvlm import SmolVLM
 
 logger = CustomLogger(__name__)
@@ -34,6 +35,7 @@ logger = CustomLogger(__name__)
 _SUPPORTED_MODELS = {
     "gemma": GemmaVL,
     "gemma4": Gemma4VL,
+    "qwen": QwenVL,
     "smolvlm": SmolVLM,
 }
 
@@ -75,13 +77,23 @@ def create_scene_model(config: PipelineConfig):
     elif backend == "gemma4":
         model_id = config.models.gemma4_model_id
 
+    elif backend == "qwen":
+        model_id = config.models.qwen_model_id
+
     elif backend == "smolvlm":
         model_id = config.models.smolvlm_model_id
-        
+
     else:
         # Defensive programming (should never happen)
         raise RuntimeError(
             f"No model ID configured for backend '{backend}'."
+        )
+
+    if not model_id or not str(model_id).strip() or str(model_id).strip() == "_":
+        raise ValueError(
+            f"Scene Understanding backend '{backend}' is selected but its "
+            f"model ID is empty. Set scene_understanding.{backend}_model_id "
+            "in the config to a Hugging Face model ID."
         )
 
     model_cls = _SUPPORTED_MODELS[backend]
