@@ -96,6 +96,10 @@ from annotation_pipeline.models.yolopv2 import YOLOPv2SegmentationEngine
 
 logger = CustomLogger(__name__)
 
+# Frame files are named ``<11-char YouTube video id>_<seconds>`` with an
+# optional ``_<n>`` suffix added by the sampler on name collisions.
+_VIDEO_FRAME_NAME_RE = re.compile(r"^([A-Za-z0-9_-]{11})_\d+(?:_\d+)?$")
+
 # ============================================================================
 # Random Frame Preparation
 # ============================================================================
@@ -3971,9 +3975,11 @@ def main() -> None:
         program_name="vlm_first_pipeline",
         path=config.paths.logs,
     )
-    config = load_config()
 
-    config.paths.ensure_output_dirs()
+    logger.info(
+        "Configuration loaded. Project root: {}",
+        config.paths.project_root,
+    )
 
     # ``ensure_output_dirs()`` creates the configured output tree eagerly.
     # Remove stage-owned model output directories immediately when their
@@ -5584,9 +5590,11 @@ def main() -> None:
                 <stem>_drivable.png
                 <stem>_lane.png
 
-        A deterministic 80/10/10 split is shared by both dataset formats.
-        The COCO/YOLO dataset images are the SAM-segmented images when SAM
-        succeeded, rather than untouched originals. The complete unsplit
+        A deterministic 80/10/10 split, grouped by source video so frames
+        of one video never straddle train and test, is shared by both
+        dataset formats. The COCO/YOLO dataset images are the untouched
+        original frames; masks and overlays are never baked into the
+        training pixels. The complete unsplit
         segmentation artifacts are preserved separately under
         SEGMENTATION_RESULTS, while FINAL/visualizations contains the
         human-readable combined visualization.
@@ -5642,9 +5650,20 @@ def main() -> None:
         #
         # A stable SHA-256 bucket avoids Python's randomized hash seed and
         # therefore produces the same split across machines/runs.
+        #
+        # The split is grouped by source video, not by image. Frames are
+        # named ``<video_id>_<seconds>.png`` (optionally with a ``_<n>``
+        # collision suffix), and consecutive frames of one video look
+        # alike, so hashing per image would put near-duplicates in both
+        # train and test. Every frame of a video lands in the same split.
+        def _split_group_for_image(image_name: str) -> str:
+            stem = Path(image_name).stem
+            match = _VIDEO_FRAME_NAME_RE.match(stem)
+            return match.group(1) if match else stem
+
         def _split_for_image(image_name: str) -> str:
             digest = hashlib.sha256(
-                image_name.encode("utf-8")
+                _split_group_for_image(image_name).encode("utf-8")
             ).hexdigest()
 
             bucket = int(digest[:8], 16) / 0x100000000
