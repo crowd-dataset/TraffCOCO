@@ -44,6 +44,10 @@ class QwenVL(HFVLM):
 
     DEFAULT_QUANTIZATION = "4bit"
 
+    # Greedy decoding without a penalty made Qwen3-VL repeat the same
+    # object until max_new_tokens (Spark test, 2026-11-17).
+    DEFAULT_REPETITION_PENALTY = 1.05
+
     def __init__(
         self,
         model_id: str,

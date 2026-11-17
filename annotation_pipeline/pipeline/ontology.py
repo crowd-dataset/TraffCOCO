@@ -35,6 +35,11 @@ from annotation_pipeline.configs.settings import (
     PipelineConfig,
 )
 
+from annotation_pipeline.pipeline.sign_text import (
+    GUIDE_SIGN_CLASS,
+    extract_sign_text,
+    needs_guide_sign_class,
+)
 from annotation_pipeline.pipeline.retrieval_query_builder import (
     RetrievalQueryBuilder,
 )
@@ -71,6 +76,9 @@ class OntologyEngine:
         self.reasoner = OntologyReasoner(
             config=config,
         )
+
+        # class_name -> ontology entry, for sign-text checks.
+        self._classes_by_name = self._load_class_entries()
 
         logger.info(
             "Initialized OntologyEngine."
@@ -130,6 +138,15 @@ class OntologyEngine:
             )
 
             return []
+
+        # A run resumed with --start-stage ontology_reasoning starts with
+        # an empty in-memory cache; fill it from the parsed file.
+        if image_name not in getattr(cache, "_cache", {}):
+
+            cache.add_scene_objects(
+                image_name=image_name,
+                objects=scene_objects,
+            )
 
         logger.info(
             "Loaded {} Scene Understanding object(s).",
@@ -286,6 +303,103 @@ class OntologyEngine:
             ontology_result["prediction"],
         )
 
+        return self._apply_sign_text(scene_object, ontology_result)
+
+    # ------------------------------------------------------------------
+    # Sign text
+    # ------------------------------------------------------------------
+
+    def _load_class_entries(self) -> dict[str, dict[str, Any]]:
+
+        try:
+            with open(
+                self.config.paths.ontology_file,
+                "r",
+                encoding="utf-8",
+            ) as f:
+                ontology = json.load(f)
+        except Exception as exc:
+            logger.warning(
+                "Could not read ontology classes for sign-text checks: {}",
+                exc,
+            )
+            return {}
+
+        classes = ontology.get("classes", [])
+
+        if isinstance(classes, dict):
+            classes = list(classes.values())
+
+        return {
+            entry["class_name"]: entry
+            for entry in classes
+            if isinstance(entry, dict) and entry.get("class_name")
+        }
+
+    def _apply_sign_text(
+        self,
+        scene_object: dict[str, Any],
+        ontology_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Store a sign's text/language/meaning and relabel signs whose
+        words the predicted class cannot represent (see sign_text.py)."""
+
+        group = str(scene_object.get("object_group") or "").lower()
+        prediction = ontology_result.get("prediction") or {}
+        predicted = prediction.get("class_name")
+        entry = self._classes_by_name.get(predicted or "", {})
+
+        if group != "traffic_sign" and entry.get("super_category") != "traffic_sign":
+            return ontology_result
+
+        sign_text = extract_sign_text(scene_object)
+
+        if sign_text is None:
+            return ontology_result
+
+        ontology_result["sign_text"] = sign_text
+
+        guide = self._classes_by_name.get(GUIDE_SIGN_CLASS)
+
+        if guide and needs_guide_sign_class(
+            sign_text=sign_text,
+            predicted_class=predicted,
+            class_entry=entry,
+        ):
+            guide_score = next(
+                (
+                    candidate.get("final_score")
+                    for candidate in ontology_result.get("top_candidates", [])
+                    if candidate.get("class_name") == GUIDE_SIGN_CLASS
+                ),
+                None,
+            )
+
+            logger.info(
+                "Sign '{}' shows text '{}' that class '{}' cannot represent; "
+                "relabelled as '{}'.",
+                scene_object.get("observed_object"),
+                sign_text.get("text"),
+                predicted,
+                GUIDE_SIGN_CLASS,
+            )
+
+            ontology_result["prediction"] = {
+                "class_id": guide.get("class_id"),
+                "class_name": GUIDE_SIGN_CLASS,
+                "ontology_score": (
+                    guide_score
+                    if guide_score is not None
+                    else prediction.get("ontology_score")
+                ),
+                # Ground this specific sign, not a generic text sign.
+                "grounding_prompt": (
+                    scene_object.get("observed_object")
+                    or guide.get("grounding_prompt")
+                ),
+                "replaced_class": predicted,
+            }
+
         return ontology_result
 
     def reason_recovered_scene_object(
@@ -326,7 +440,7 @@ class OntologyEngine:
             result.predicted_class.entry
         )
 
-        return {
+        return self._apply_sign_text(scene_object, {
             "retrieval_query": (
                 retrieval_query.embedding_text
             ),
@@ -352,4 +466,4 @@ class OntologyEngine:
                 }
                 for candidate in result.candidates
             ],
-        }
+        })

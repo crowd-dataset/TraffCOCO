@@ -95,6 +95,9 @@ class HFVLM(BaseVLM):
 
     DEFAULT_DO_SAMPLE = False
 
+    # None keeps the model's own generation config.
+    DEFAULT_REPETITION_PENALTY = None
+
     # -------------------------------------------------------------------------
     # Initialization
     # -------------------------------------------------------------------------
@@ -137,6 +140,8 @@ class HFVLM(BaseVLM):
         self.quantization = self.DEFAULT_QUANTIZATION
 
         self.do_sample = self.DEFAULT_DO_SAMPLE
+
+        self.repetition_penalty = self.DEFAULT_REPETITION_PENALTY
 
         # ----------------------------------------------------------
         # Benchmark statistics
@@ -478,6 +483,11 @@ class HFVLM(BaseVLM):
 
         start = time.perf_counter()
 
+        generate_kwargs = {}
+
+        if self.repetition_penalty is not None:
+            generate_kwargs["repetition_penalty"] = self.repetition_penalty
+
         with torch.no_grad():
 
             outputs = self.model.generate(
@@ -486,6 +496,7 @@ class HFVLM(BaseVLM):
                 do_sample=self.do_sample,
                 use_cache=True,
                 pad_token_id=self.processor.tokenizer.eos_token_id,
+                **generate_kwargs,
             )
 
         generation_time = time.perf_counter() - start

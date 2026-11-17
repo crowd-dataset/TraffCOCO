@@ -218,6 +218,16 @@ If no text is visible:
 If no symbol is visible:
 "symbol": "none"
 
+When sign text is readable, in any language or script:
+• copy it exactly, in its original script, into "text"
+  (for example "次の信号 左折", not a romanisation)
+• name its language in "language" (for example "Japanese")
+• give its meaning in English in "meaning"
+  (for example "next signal: turn left")
+Translate only text you can read; never guess unreadable characters.
+Use "language": "none" and "meaning": "none" when "text" is
+"none" or "unreadable".
+
 Never confuse "none", "unknown" and "unreadable".
 
 Unreadable text does NOT make the entire sign type unreadable.
@@ -384,6 +394,8 @@ Use for all remaining traffic-related objects.
         "material": "...",
         "reflective": true | false | "unknown",
         "text": "...",
+        "language": "...",
+        "meaning": "...",
         "symbol": "...",
         "distinguishing_features": [
             "...",

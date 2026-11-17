@@ -44,6 +44,17 @@ from annotation_pipeline.configs.settings import (
 logger = CustomLogger(__name__)
 
 
+def _flash_attn_varlen_available() -> bool:
+    """Return True when flash_attn.flash_attn_varlen_func can be imported."""
+
+    try:
+        from flash_attn import flash_attn_varlen_func  # noqa: F401
+    except Exception:
+        return False
+
+    return True
+
+
 class LocateAnything:
     """
     NVIDIA LocateAnything-3B model wrapper.
@@ -100,6 +111,16 @@ class LocateAnything:
         self.vision_attention_backend = "auto"
 
         self.strict_attention = True
+
+        # la_flash needs flash_attn's varlen kernel. Without it (aarch64
+        # such as the DGX Spark, macOS) use SDPA instead of failing.
+        if not _flash_attn_varlen_available():
+            logger.warning(
+                "flash_attn varlen kernel not available. LocateAnything "
+                "will use SDPA attention (slower)."
+            )
+            self.attention_backend = "sdpa"
+            self.strict_attention = False
 
         # ----------------------------------------------------------
         # NVIDIA runtime
