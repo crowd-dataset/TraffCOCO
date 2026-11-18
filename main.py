@@ -105,6 +105,7 @@ from annotation_pipeline.models.segmentation.surface_segmenter import (
     export_surface_coco,
     load_surface_classes,
     overlay_surfaces,
+    remove_barriers_on_flat_ground,
     remove_surface_covered_markings,
     surface_mask_path,
 )
@@ -5423,6 +5424,7 @@ def main() -> None:
     # final in-memory detections after annotation, postprocessing, optional
     # semantic verification, and >30 routing decisions. SAM 2 receives the
     # existing bbox as a box prompt and never replaces that bbox.
+    sam_engine = None
     if config.pipeline.run_segmentation and stage_is_at_or_after("sam2"):
         sam_segmentation_stage_start = time.perf_counter()
 
@@ -5676,6 +5678,21 @@ def main() -> None:
         finally:
             surface_segmenter.unload()
             surface_stage_time = time.perf_counter() - surface_stage_start
+
+        # Guardrails and other upright barriers whose SAM mask lies on
+        # road, sidewalk or curb are grounding errors (a curb boxed as a
+        # guardrail); see remove_barriers_on_flat_ground.
+        barrier_changed = remove_barriers_on_flat_ground(
+            final_detections_by_image,
+            config.paths.outputs,
+        )
+        if barrier_changed and sam_engine is not None:
+            for image_path in image_paths:
+                if image_path.name in barrier_changed:
+                    sam_engine.rerender_overlay(
+                        image_path,
+                        final_detections_by_image[image_path.name],
+                    )
 
     else:
         logger.info(
