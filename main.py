@@ -89,6 +89,10 @@ from annotation_pipeline.pipeline.annotation import AnnotationEngine
 from annotation_pipeline.pipeline.deduplication import (
     deduplicate_detections_by_image,
 )
+from annotation_pipeline.pipeline.shape_check import (
+    POST_CLASS,
+    check_upright_shapes,
+)
 from annotation_pipeline.prompts.load_prompt import load_prompt
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
@@ -3745,6 +3749,29 @@ def _draw_final_detections(
     return rendered
 
 
+def _ontology_class_id(config, class_name: str) -> str | None:
+    """Return the ontology class_id of ``class_name`` (None if absent)."""
+
+    try:
+        ontology = json.loads(
+            Path(config.paths.ontology_file).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read ontology for class ids: {}", exc)
+        return None
+
+    stack = [ontology]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("class_name") == class_name:
+                return node.get("class_id")
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return None
+
+
 def _coco_images_for_surfaces(
     coco_path: Path,
     image_paths: list[Path],
@@ -5486,6 +5513,21 @@ def main() -> None:
                     detections_by_image=final_detections_by_image,
                 )
                 sam_progress.update(1)
+
+            # Cones, posts and bollards: drop boxes whose mask is wider
+            # than tall and relabel "cones" that do not narrow to
+            # flexible posts (see shape_check.py).
+            shape_counts = check_upright_shapes(
+                final_detections_by_image,
+                post_class_id=_ontology_class_id(config, POST_CLASS),
+            )
+            logger.info("Upright shape check: {}", shape_counts)
+            for image_path in image_paths:
+                if image_path.name in shape_counts["changed"]:
+                    sam_engine.rerender_overlay(
+                        image_path,
+                        final_detections_by_image[image_path.name],
+                    )
 
             # Update the authoritative final result metadata to point to
             # the SAM-segmented visualization.

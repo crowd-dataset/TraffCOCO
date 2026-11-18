@@ -88,7 +88,7 @@ flowchart LR
 | Ontology reasoning | `BAAI/bge-base-en-v1.5` + FAISS | Maps each object to one of 416 ontology classes and the prompt used for grounding (`annotation_pipeline/models/ontology/traffic_ontology_v2.json`). A sign whose words the chosen class cannot represent becomes `guide_information_sign`, and the replaced class is kept for review. |
 | Grounding | `nvidia/LocateAnything-3B` | Finds boxes for each class prompt. |
 | Annotation | – | Links boxes to scene objects and removes slivers (under 6 px or 64 px²), implausible sizes and duplicates of the same object, keeping distant small objects such as traffic lights. Lane lines and hatched areas are taken from the surface masks instead of boxes; compact painted symbols (arrows, crossings, stop lines) stay objects. |
-| Instance masks | SAM 2.1 Hiera Large | One mask per final box. |
+| Instance masks | SAM 2.1 Hiera Large | One mask per final box. Cones, posts and bollards are checked against their mask: boxes wider than tall are dropped, and a "cone" that does not narrow becomes `flexible_post`. |
 | Surface segmentation | `facebook/mask2former-swin-large-mapillary-vistas-semantic` | Per-pixel labels for 26 road and roadside classes: road, sidewalk, curb, bike lane, crossings, lane markings, terrain, vegetation, barriers, bridges and more. |
 | Road perception (optional) | YOLOPv2 | Drivable area and lane lines. |
 | Export | – | COCO instances, COCO-Stuff surfaces and YOLO labels from one source of truth, split by video. |
@@ -137,7 +137,7 @@ An object annotation carries the usual COCO fields plus its provenance. Signs wi
 - **Scene-model reliability.** Qwen3-VL-8B sometimes loops, repeating objects until its token limit; the parser keeps every complete object. Gemma models are the default.
 - **Grounding.** LocateAnything sometimes boxes the wrong thing (a pillar as a "flexible post", tail lights as traffic lights). It returned no boxes for one low-resolution (640×360) frame. It also samples at temperature 0.7, so runs are not deterministic.
 - **One description, several boxes.** A light's state, or a sign's text, is decided once per described object. When that object's query returns several boxes, the state is shared by all of them, and the sign text is attached to none (it is unknown which box says it).
-- **Fine-grained confusions.** Shop signs are often labelled `billboard`, flexible posts `traffic cone`, and a rider can get an extra pedestrian or vehicle box. Some boxes span two neighbouring objects.
+- **Fine-grained confusions.** Shop signs are often labelled `billboard`, and a rider can get an extra pedestrian or vehicle box. Some boxes span two neighbouring objects. Flexible posts called "traffic cone" by the scene model are now caught by a shape check on the SAM mask (a cone narrows towards the top, a post does not); the figure predates that check.
 - **Throughput.** Measured on the DGX Spark: the VLM is the bottleneck (minutes per frame for large models), LocateAnything takes tens of seconds per frame, and SAM 2 and Mask2Former take under two seconds. Phase 1 needs batched VLM serving on HPC.
 
 ## Getting started

@@ -57979,6 +57979,8 @@
       "semantic_information": {
         "keywords": [
           "flexible post",
+          "post cone",
+          "orange post",
           "tubular marker",
           "wand",
           "lane separator",
@@ -58040,7 +58042,7 @@
         "relative_position_to_road",
         "structural_continuity"
       ],
-      "grounding_prompt": "flexible lane separator post"
+      "grounding_prompt": "flexible post"
     },
     {
       "class_id": "F022",

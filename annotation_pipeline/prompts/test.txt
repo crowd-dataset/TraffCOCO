@@ -261,8 +261,18 @@ pedestrian/cyclist/rider → road_user
 traffic sign → traffic_sign
 traffic light → traffic_signal
 crosswalk/lane divider/road arrow → road_marking
-guardrail/bollard/delineator/median → road_infrastructure
+guardrail/bollard/delineator/flexible post/median → road_infrastructure
+traffic cone/barrel → temporary_object
 billboard/advertisement/shop name sign → road_infrastructure
+
+Traffic cones and posts are different objects. A traffic cone is a
+hollow cone that narrows from a wide square base to a small top. A thin
+cylinder of the same width from top to bottom, often orange or white
+with reflective bands and standing in a row on a hatched area or along
+a lane edge, is a flexible post (also called a delineator or post
+cone): name it "flexible post" with object_group "road_infrastructure",
+not "traffic cone". A short rigid metal or concrete post that blocks
+vehicles is a "bollard".
 
 Advertising billboards, hoardings and shop or business name signs are
 NOT traffic signs, even when they carry text. Use object_group
