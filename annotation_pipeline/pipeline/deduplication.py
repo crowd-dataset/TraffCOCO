@@ -190,6 +190,9 @@ def deduplicate_detections(
 
         if alternatives:
             winner["alternative_labels"] = alternatives
+            # Labels this box was merged from; conflict_check.py asks the
+            # scene VLM which one fits.
+            winner["merged_labels"] = alternatives
 
         logger.info(
             "Duplicate detections merged: kept '{}' {} over {}",

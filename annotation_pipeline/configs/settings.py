@@ -281,6 +281,7 @@ class PipelineParams:
     supported_image_extensions: list
 
     run_surface_segmentation: bool = False
+    run_conflict_check: bool = True
 
 # ============================================================================
 # Pipeline Configuration
@@ -570,6 +571,7 @@ def load_config(
         supported_image_extensions=(".png", ".jpg", ".jpeg", ".webp"),
 
         run_surface_segmentation=raw.get("run_surface_segmentation", False),
+        run_conflict_check=raw.get("run_conflict_check", True),
     )
 
     # ----------------------------------------------------------------------

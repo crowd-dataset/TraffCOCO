@@ -89,6 +89,7 @@ from annotation_pipeline.pipeline.annotation import AnnotationEngine
 from annotation_pipeline.pipeline.deduplication import (
     deduplicate_detections_by_image,
 )
+from annotation_pipeline.pipeline.conflict_check import run_conflict_check
 from annotation_pipeline.pipeline.shape_check import (
     POST_CLASS,
     check_upright_shapes,
@@ -3750,27 +3751,58 @@ def _draw_final_detections(
     return rendered
 
 
-def _ontology_class_id(config, class_name: str) -> str | None:
-    """Return the ontology class_id of ``class_name`` (None if absent)."""
+def _ontology_entries(config) -> list[dict]:
+    """Return every class entry of the ontology file ([] if unreadable)."""
 
     try:
         ontology = json.loads(
             Path(config.paths.ontology_file).read_text(encoding="utf-8")
         )
     except (OSError, ValueError) as exc:
-        logger.warning("Could not read ontology for class ids: {}", exc)
-        return None
+        logger.warning("Could not read ontology file: {}", exc)
+        return []
 
+    entries = []
     stack = [ontology]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            if node.get("class_name") == class_name:
-                return node.get("class_id")
+            if "class_name" in node:
+                entries.append(node)
             stack.extend(node.values())
         elif isinstance(node, list):
             stack.extend(node)
+    return entries
+
+
+def _ontology_class_id(config, class_name: str) -> str | None:
+    """Return the ontology class_id of ``class_name`` (None if absent)."""
+
+    for entry in _ontology_entries(config):
+        if entry.get("class_name") == class_name:
+            return entry.get("class_id")
     return None
+
+
+def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None:
+    """Run conflict_check.py; a failure is logged and leaves boxes as they are."""
+
+    if not getattr(config.pipeline, "run_conflict_check", True):
+        return
+
+    try:
+        counts = run_conflict_check(
+            config,
+            image_paths,
+            detections_by_image,
+            class_ids={
+                entry["class_name"]: entry.get("class_id")
+                for entry in _ontology_entries(config)
+            },
+        )
+        logger.info("Conflict check: {}", counts)
+    except Exception as exc:
+        logger.error("Conflict check failed, boxes left unchanged: {}", exc)
 
 
 def _coco_images_for_surfaces(
@@ -5481,6 +5513,15 @@ def main() -> None:
                     config.models.surface_segmentation_marking_classes,
                 )
 
+            # Boxes claimed by two labels: the scene VLM decides from a
+            # crop (see conflict_check.py). Already-checked boxes are
+            # skipped, so the second call before export is cheap.
+            _run_conflict_check_safely(
+                config,
+                image_paths,
+                final_detections_by_image,
+            )
+
             sam_input_counts = {
                 image_path.name: len(
                     final_detections_by_image.get(image_path.name, [])
@@ -6620,6 +6661,15 @@ def main() -> None:
                     final_detections_by_image,
                     config.models.surface_segmentation_marking_classes,
                 )
+
+            # Boxes claimed by two labels: the scene VLM decides from a
+            # crop (see conflict_check.py). Already-checked boxes are
+            # skipped, so the second call before export is cheap.
+            _run_conflict_check_safely(
+                config,
+                image_paths,
+                final_detections_by_image,
+            )
 
             coco_path, yolo_yaml_path = export_final_datasets(
                 config=config,
