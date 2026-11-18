@@ -262,6 +262,12 @@ traffic sign → traffic_sign
 traffic light → traffic_signal
 crosswalk/lane divider/road arrow → road_marking
 guardrail/bollard/delineator/median → road_infrastructure
+billboard/advertisement/shop name sign → road_infrastructure
+
+Advertising billboards, hoardings and shop or business name signs are
+NOT traffic signs, even when they carry text. Use object_group
+"road_infrastructure" and name them "billboard" or "shop sign". Reserve
+"traffic_sign" for signs that give road directions, rules or warnings.
 
 Do NOT use fine-grained ontology class names as object_group.
 

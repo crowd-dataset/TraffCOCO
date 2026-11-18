@@ -40,7 +40,7 @@ Three things are missing at scale:
    - CROWD covers 238 countries, day and night, in naturalistic driving by many different drivers and cameras.
 2. **Fine-grained traffic semantics.**
    - Downstream questions need more than "car / person / sign": what a sign says, what state a light is in, whether there is a bike lane or a sidewalk.
-   - TraffCOCO uses a 414-class traffic ontology with country-specific sign classes, plus per-pixel surface classes.
+   - TraffCOCO uses a 416-class traffic ontology with country-specific sign classes, plus per-pixel surface classes.
 3. **Text in the scene, in any language.**
    - Guide and warning signs are often written, not drawn.
    - TraffCOCO keeps the text in its original script, names the language, and gives an English meaning, so a sign keeps what it says in any language. So far this has been tested on Japanese.
@@ -71,7 +71,7 @@ The teacher is a chain of open models, run per frame from `main.py`:
 ```mermaid
 flowchart LR
     F[CROWD frame<br/>every 20 s] --> S[Scene understanding<br/>VLM lists every object,<br/>light state, sign text,<br/>language and meaning]
-    S --> O[Ontology reasoning<br/>BGE + FAISS over<br/>414 classes]
+    S --> O[Ontology reasoning<br/>BGE + FAISS over<br/>416 classes]
     O --> G[Grounding<br/>LocateAnything-3B<br/>boxes per class]
     G --> A[Annotation<br/>ID reconciliation,<br/>geometry checks,<br/>de-duplication]
     A --> M[SAM 2.1<br/>instance masks]
@@ -85,9 +85,9 @@ flowchart LR
 |---|---|---|
 | Frame sampling | – | Downloads CROWD videos and takes frames every `interval_seconds` (20), filtered by place, time of day, vehicle and video ID. |
 | Scene understanding | Gemma 3 12B (default), Gemma 4, Qwen3-VL-8B or SmolVLM2 | Lists every traffic-relevant object with a description, light state and, for signs, the exact text in its original script, its language and English meaning. The prompt is chosen in the config. |
-| Ontology reasoning | `BAAI/bge-base-en-v1.5` + FAISS | Maps each object to one of 414 ontology classes and the prompt used for grounding (`annotation_pipeline/models/ontology/traffic_ontology_v2.json`). A sign whose words the chosen class cannot represent becomes `guide_information_sign`, and the replaced class is kept for review. |
+| Ontology reasoning | `BAAI/bge-base-en-v1.5` + FAISS | Maps each object to one of 416 ontology classes and the prompt used for grounding (`annotation_pipeline/models/ontology/traffic_ontology_v2.json`). A sign whose words the chosen class cannot represent becomes `guide_information_sign`, and the replaced class is kept for review. |
 | Grounding | `nvidia/LocateAnything-3B` | Finds boxes for each class prompt. |
-| Annotation | – | Links boxes to scene objects and removes slivers (under 6 px or 64 px²), implausible sizes and duplicates of the same object, keeping distant small objects such as traffic lights. |
+| Annotation | – | Links boxes to scene objects and removes slivers (under 6 px or 64 px²), implausible sizes and duplicates of the same object, keeping distant small objects such as traffic lights. Lane lines and hatched areas are taken from the surface masks instead of boxes; compact painted symbols (arrows, crossings, stop lines) stay objects. |
 | Instance masks | SAM 2.1 Hiera Large | One mask per final box. |
 | Surface segmentation | `facebook/mask2former-swin-large-mapillary-vistas-semantic` | Per-pixel labels for 26 road and roadside classes: road, sidewalk, curb, bike lane, crossings, lane markings, terrain, vegetation, barriers, bridges and more. |
 | Road perception (optional) | YOLOPv2 | Drivable area and lane lines. |
@@ -132,12 +132,12 @@ An object annotation carries the usual COCO fields plus its provenance. Signs wi
 
 ## Current status
 
-**Pilot stage.** The full chain runs end to end on an NVIDIA DGX Spark (GB10) and has been checked by eye on the frames in the figure. Known issues that phase 2 must measure and fix:
+**Pilot stage.** The full chain runs end to end on an NVIDIA DGX Spark (GB10). On the frames in the figure, a box-by-box check by eye found 56 of 74 decidable boxes correct (76%, 16 more undecidable). Vehicles, people, streetlights and traffic lights were mostly right. Known issues that phase 2 must measure and fix:
 
 - **Scene-model reliability.** Qwen3-VL-8B sometimes loops, repeating objects until its token limit; the parser keeps every complete object. Gemma models are the default.
 - **Grounding.** LocateAnything sometimes boxes the wrong thing (a pillar as a "flexible post", tail lights as traffic lights). It returned no boxes for one low-resolution (640×360) frame. It also samples at temperature 0.7, so runs are not deterministic.
 - **One description, several boxes.** A light's state, or a sign's text, is decided once per described object. When that object's query returns several boxes, the state is shared by all of them, and the sign text is attached to none (it is unknown which box says it).
-- **Vocabulary gaps.** The ontology has no billboard or advertising class, so roadside adverts can be labelled as signs. Road markings are more reliable from the surface masks than from boxes.
+- **Fine-grained confusions.** Shop signs are often labelled `billboard`, flexible posts `traffic cone`, and a rider can get an extra pedestrian or vehicle box. Some boxes span two neighbouring objects.
 - **Throughput.** Measured on the DGX Spark: the VLM is the bottleneck (minutes per frame for large models), LocateAnything takes tens of seconds per frame, and SAM 2 and Mask2Former take under two seconds. Phase 1 needs batched VLM serving on HPC.
 
 ## Getting started

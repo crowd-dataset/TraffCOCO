@@ -179,6 +179,9 @@ class ModelsConfig:
     )
     surface_segmentation_classes: tuple = ()
     surface_segmentation_max_side: int = 1280
+    # Ontology marking classes taken from the surface masks instead of
+    # boxes; empty means the built-in default list.
+    surface_segmentation_marking_classes: tuple = ()
 
 # ============================================================================
 # Logging
@@ -524,6 +527,9 @@ def load_config(
         ),
         surface_segmentation_max_side=int(
             raw.get("surface_segmentation", {}).get("max_side", 1280)
+        ),
+        surface_segmentation_marking_classes=tuple(
+            raw.get("surface_segmentation", {}).get("marking_classes", [])
         ),
     )
 

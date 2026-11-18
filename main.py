@@ -101,6 +101,7 @@ from annotation_pipeline.models.segmentation.surface_segmenter import (
     export_surface_coco,
     load_surface_classes,
     overlay_surfaces,
+    remove_surface_covered_markings,
     surface_mask_path,
 )
 
@@ -5445,6 +5446,12 @@ def main() -> None:
             # object; segment and export each object once.
             deduplicate_detections_by_image(final_detections_by_image)
 
+            if getattr(config.pipeline, "run_surface_segmentation", False):
+                remove_surface_covered_markings(
+                    final_detections_by_image,
+                    config.models.surface_segmentation_marking_classes,
+                )
+
             sam_input_counts = {
                 image_path.name: len(
                     final_detections_by_image.get(image_path.name, [])
@@ -6548,6 +6555,12 @@ def main() -> None:
         try:
             # Also covers runs without SAM 2 (idempotent after it).
             deduplicate_detections_by_image(final_detections_by_image)
+
+            if getattr(config.pipeline, "run_surface_segmentation", False):
+                remove_surface_covered_markings(
+                    final_detections_by_image,
+                    config.models.surface_segmentation_marking_classes,
+                )
 
             coco_path, yolo_yaml_path = export_final_datasets(
                 config=config,
