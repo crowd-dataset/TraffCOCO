@@ -3790,6 +3790,8 @@ def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None
     if not getattr(config.pipeline, "run_conflict_check", True):
         return
 
+    entries = _ontology_entries(config)
+
     try:
         counts = run_conflict_check(
             config,
@@ -3797,7 +3799,11 @@ def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None
             detections_by_image,
             class_ids={
                 entry["class_name"]: entry.get("class_id")
-                for entry in _ontology_entries(config)
+                for entry in entries
+            },
+            class_groups={
+                entry["class_name"]: entry.get("super_category") or ""
+                for entry in entries
             },
         )
         logger.info("Conflict check: {}", counts)

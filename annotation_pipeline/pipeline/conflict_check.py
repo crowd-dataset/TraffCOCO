@@ -20,12 +20,22 @@ A box is in conflict when
   larger. A rider and the two-wheeler or pedal vehicle they ride are two
   objects and are not a conflict.
 
+A road user or vehicle box is also asked about when its scene object
+grounded to more than one box (counting boxes merged away by
+de-duplication). Each scene object is one thing the VLM saw, so its extra
+boxes are often other objects: in the same frame "auto-rickshaw" also
+boxed a motorcycle and "motorcycle with rider" also boxed a small white
+car, with no competing box to flag them. The options are its own label
+and every other road-user or vehicle label in the frame.
+
 For each conflict box the VLM gets a crop of the frame with the box drawn
 in red and picks one of the competing labels or "none of these":
 
 * its own label: kept;
-* a label it was merged from: relabelled (old label kept in
-  ``alternative_labels``);
+* another label: relabelled (old label kept in ``alternative_labels``),
+  unless a box that already has that label lies at least half inside this
+  one: then the VLM was most likely naming that neighbour (a motorcyclist
+  riding in front of an SUV) and the box is left unchanged;
 * the label of an overlapping box that the VLM confirmed for that box:
   dropped as a duplicate of it;
 * anything else (none, no answer, partner not confirmed): unchanged.
@@ -52,6 +62,9 @@ logger = CustomLogger(__name__)
 CONFLICT_IOU = 0.5
 CONFLICT_CONTAINMENT = 0.9
 
+# Ontology super-categories checked for extra boxes of one scene object.
+MOVER_GROUPS = frozenset({"vehicle", "road_user"})
+
 RIDER_CLASSES = frozenset({"cyclist", "motorcyclist", "delivery_rider"})
 RIDDEN_CLASSES = frozenset({
     "motorcycle",
@@ -74,8 +87,29 @@ PROMPT = (
     "object. Which of these best describes the object inside the red "
     "rectangle?\n{options}\n"
     "Judge only the object inside the red rectangle, not objects next to "
-    "it. Answer with the letter only."
+    "it. If the rectangle is mainly around a vehicle, name the vehicle, "
+    "even if someone is riding it. Answer with the letter only."
 )
+
+
+def _same_class(a: str, b: str) -> bool:
+    """Ontology spellings of one class (``guardrail``, ``guard_rail``)."""
+
+    return a.replace("_", "") == b.replace("_", "")
+
+
+def _inside_fraction(inner: tuple, outer: tuple) -> float:
+    """Share of ``inner``'s area that lies inside ``outer``."""
+
+    width = min(inner[2], outer[2]) - max(inner[0], outer[0])
+    height = min(inner[3], outer[3]) - max(inner[1], outer[1])
+    if width <= 0 or height <= 0:
+        return 0.0
+    area = (inner[2] - inner[0]) * (inner[3] - inner[1])
+    return width * height / area
+
+
+NEIGHBOUR_INSIDE = 0.5
 
 
 def _label(detection: dict[str, Any]) -> str:
@@ -119,8 +153,22 @@ def _rider_pair(a: str, b: str) -> bool:
     )
 
 
-def find_conflicts(detections: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
-    """Return {index: {"candidates": [...], "partners": {label: [index]}}}."""
+def _is_mover(label: str, class_groups: dict[str, str]) -> bool:
+
+    return class_groups.get(label) in MOVER_GROUPS
+
+
+def find_conflicts(
+    detections: list[dict[str, Any]],
+    class_groups: dict[str, str] | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Return {index: {"kind", "candidates": [...], "partners": {label: [index]}}}.
+
+    ``class_groups`` maps ontology class names to super-categories; without
+    it, extra boxes of one scene object are not checked.
+    """
+
+    class_groups = class_groups or {}
 
     labels = [_label(d) for d in detections]
     boxes = [_box(d) for d in detections]
@@ -135,7 +183,7 @@ def find_conflicts(detections: list[dict[str, Any]]) -> dict[int, dict[str, Any]
 
         for merged in detection.get("merged_labels") or []:
             merged = str(merged).strip().lower().replace(" ", "_")
-            if merged and merged not in candidates:
+            if merged and not any(_same_class(merged, c) for c in candidates):
                 candidates.append(merged)
 
         for j, other in enumerate(detections):
@@ -143,17 +191,54 @@ def find_conflicts(detections: list[dict[str, Any]]) -> dict[int, dict[str, Any]
                 j == i
                 or boxes[j] is None
                 or not labels[j]
-                or labels[j] == labels[i]
+                or _same_class(labels[j], labels[i])
                 or _rider_pair(labels[i], labels[j])
                 or not _overlaps(boxes[i], boxes[j])
             ):
                 continue
             partners.setdefault(labels[j], []).append(j)
-            if labels[j] not in candidates:
+            if not any(_same_class(labels[j], c) for c in candidates):
                 candidates.append(labels[j])
 
         if len(candidates) > 1:
-            conflicts[i] = {"candidates": candidates, "partners": partners}
+            conflicts[i] = {
+                "kind": "competing_labels",
+                "candidates": candidates,
+                "partners": partners,
+            }
+
+    # Extra boxes of one scene object (road users and vehicles only).
+    boxes_per_object: dict[Any, int] = {}
+    for detection in detections:
+        for object_id in [detection.get("object_id")] + list(
+            detection.get("merged_object_ids") or []
+        ):
+            if object_id is not None:
+                boxes_per_object[object_id] = boxes_per_object.get(object_id, 0) + 1
+
+    mover_labels = sorted(
+        {label for label in labels if label and _is_mover(label, class_groups)}
+    )
+
+    for i, detection in enumerate(detections):
+        if (
+            i in conflicts
+            or "conflict_check" in detection
+            or boxes[i] is None
+            or not _is_mover(labels[i], class_groups)
+            or boxes_per_object.get(detection.get("object_id"), 0) < 2
+        ):
+            continue
+
+        candidates = [labels[i]] + [
+            m for m in mover_labels if not _same_class(m, labels[i])
+        ]
+        if len(candidates) > 1:
+            conflicts[i] = {
+                "kind": "extra_box",
+                "candidates": candidates,
+                "partners": {},
+            }
 
     return conflicts
 
@@ -243,6 +328,7 @@ def decide(
     """Apply the VLM answers; return the detections that are kept."""
 
     labels = [_label(d) for d in detections]
+    boxes = [_box(d) for d in detections]
     drop: set[int] = set()
 
     for i, conflict in conflicts.items():
@@ -260,6 +346,15 @@ def decide(
             if confirmed:
                 action = "dropped_duplicate"
                 drop.add(i)
+        elif answer and answer != NONE_OPTION and any(
+            j != i
+            and labels[j] == answer
+            and boxes[j] is not None
+            and boxes[i] is not None
+            and _inside_fraction(boxes[j], boxes[i]) >= NEIGHBOUR_INSIDE
+            for j in range(len(detections))
+        ):
+            action = "unchanged_neighbour_answer"
         elif answer and answer != NONE_OPTION:
             action = "relabelled"
             detection = detections[i]
@@ -276,12 +371,14 @@ def decide(
                 detection["class_id"] = class_ids[answer]
 
         detections[i]["conflict_check"] = {
+            "kind": conflict.get("kind"),
             "candidates": conflict["candidates"],
             "answer": answer,
             "action": action,
         }
         logger.info(
-            "Conflict check | {} box {} | options {} | answer {} -> {}",
+            "Conflict check | {} | {} box {} | options {} | answer {} -> {}",
+            conflict.get("kind"),
             own,
             [round(v) for v in _box(detections[i]) or ()],
             conflict["candidates"],
@@ -297,11 +394,15 @@ def run_conflict_check(
     image_paths: list[Path],
     detections_by_image: dict[str, list[dict[str, Any]]],
     class_ids: dict[str, str],
+    class_groups: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Check every conflict box with the scene VLM; change detections in place."""
 
     targets = {
-        image_path: find_conflicts(detections_by_image.get(image_path.name, []))
+        image_path: find_conflicts(
+            detections_by_image.get(image_path.name, []),
+            class_groups,
+        )
         for image_path in image_paths
     }
     targets = {path: found for path, found in targets.items() if found}
