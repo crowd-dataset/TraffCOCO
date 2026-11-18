@@ -133,12 +133,24 @@ An object annotation carries the usual COCO fields plus its provenance. Signs wi
 
 ## Current status
 
-**Pilot stage.** The full chain runs end to end on an NVIDIA DGX Spark (GB10). On the frames in the figure, a box-by-box check by eye found 56 of 74 decidable boxes correct (76%, 16 more undecidable). That check was made before the mask and VLM conflict checks were added; the figure now shows a later run with them and has not been rechecked box by box. Vehicles, people, streetlights and traffic lights were mostly right. Known issues that phase 2 must measure and fix:
+**Pilot stage.** The full chain runs end to end on an NVIDIA DGX Spark (GB10). On the six frames in the figure, a box-by-box check by eye found 60 of 69 decidable boxes correct (87%; 17 more boxes were too small or blurred to judge, 86 in all). An earlier run without the mask and VLM conflict checks scored 56 of 74 (76%).
+
+| Frame | Boxes | Correct | Wrong | Undecidable |
+|---|---|---|---|---|
+| Tokyo, Japan | 11 | 7 | 1 | 3 |
+| Toyokawa, Japan | 11 | 10 | 1 | 0 |
+| Bengaluru, India | 26 | 18 | 2 | 6 |
+| Amsterdam, Netherlands | 9 | 5 | 2 | 2 |
+| Eindhoven, Netherlands | 25 | 16 | 3 | 6 |
+| Tilburg, Netherlands | 4 | 4 | 0 | 0 |
+| **Total** | **86** | **60** | **9** | **17** |
+
+Vehicles, people, riders, flexible posts, streetlights, traffic lights and the Japanese guide sign were right. The nine errors are mostly signs and infrastructure: a sign box on foliage, a "zebra crossing" on a canal edge, a "construction ahead sign" on an excavator, a shop sign labelled `billboard`, boxes on empty sky or bare wall, a road-arrow box reaching down to the dashboard, a sliver beside a car, and one box over two parked vehicles. Some objects get no box at all (a cyclist on a median, a person standing behind a rider, a shipping container, bollards). This is a small pilot sample, not a benchmark. Known issues that phase 2 must measure and fix:
 
 - **Scene-model reliability.** Qwen3-VL-8B sometimes loops, repeating objects until its token limit; the parser keeps every complete object. Gemma models are the default.
 - **Grounding.** LocateAnything sometimes boxes the wrong thing (a pillar as a "flexible post", tail lights as traffic lights, a curb as a guardrail). The mask checks after SAM 2 and surface segmentation catch some of these. It returned no boxes for a low-resolution (640×360) frame in some runs. It also samples at temperature 0.7, so runs are not deterministic.
 - **One description, several boxes.** A light's state, or a sign's text, is decided once per described object. When that object's query returns several boxes, the state is shared by all of them, and the sign text is attached to none (it is unknown which box says it).
-- **Fine-grained confusions.** Shop signs are often labelled `billboard`. A description sometimes grounds to an object of another class (an "auto-rickshaw" box on a motorcycle); the conflict check catches this for road users and vehicles, but not yet for signs or infrastructure. Some boxes span two neighbouring objects. Flexible posts called "traffic cone" by the scene model are now caught by a shape check on the SAM mask (a cone narrows towards the top, a post does not).
+- **Fine-grained confusions.** Shop signs are often labelled `billboard`, and small or blurred night lights are hard to tell apart (headlight, streetlight or traffic light). A description sometimes grounds to an object of another class (an "auto-rickshaw" box on a motorcycle); the conflict check catches this for road users and vehicles, but not yet for signs or infrastructure. Some boxes span two neighbouring objects. Flexible posts called "traffic cone" by the scene model are now caught by a shape check on the SAM mask (a cone narrows towards the top, a post does not).
 - **Throughput.** Measured on the DGX Spark: the VLM is the bottleneck (minutes per frame for large models), LocateAnything takes tens of seconds per frame, and SAM 2 and Mask2Former take under two seconds. Phase 1 needs batched VLM serving on HPC.
 
 ## Getting started
