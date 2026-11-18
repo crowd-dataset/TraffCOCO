@@ -89,7 +89,10 @@ from annotation_pipeline.pipeline.annotation import AnnotationEngine
 from annotation_pipeline.pipeline.deduplication import (
     deduplicate_detections_by_image,
 )
-from annotation_pipeline.pipeline.conflict_check import run_conflict_check
+from annotation_pipeline.pipeline.conflict_check import (
+    align_rider_labels,
+    run_conflict_check,
+)
 from annotation_pipeline.pipeline.shape_check import (
     POST_CLASS,
     check_upright_shapes,
@@ -3785,12 +3788,24 @@ def _ontology_class_id(config, class_name: str) -> str | None:
 
 
 def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None:
-    """Run conflict_check.py; a failure is logged and leaves boxes as they are."""
-
-    if not getattr(config.pipeline, "run_conflict_check", True):
-        return
+    """Run conflict_check.py, then match rider labels to their vehicles."""
 
     entries = _ontology_entries(config)
+
+    if getattr(config.pipeline, "run_conflict_check", True):
+        _conflict_check(config, image_paths, detections_by_image, entries)
+
+    # A rider's class follows the (checked) vehicle they ride.
+    align_rider_labels(
+        detections_by_image,
+        class_ids={
+            entry["class_name"]: entry.get("class_id") for entry in entries
+        },
+    )
+
+
+def _conflict_check(config, image_paths, detections_by_image, entries) -> None:
+    """Run run_conflict_check; a failure is logged and changes nothing."""
 
     try:
         counts = run_conflict_check(
