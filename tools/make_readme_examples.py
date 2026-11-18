@@ -35,7 +35,7 @@ EXAMPLES = [
     ("4-RJNtuAL8U_80", "Bengaluru, India (day)"),
     ("ZXO-SvYjCxA_3375", "Amsterdam, Netherlands (day)"),
     ("1nC-7OsXgyM_2417", "Eindhoven, Netherlands (night)"),
-    ("Uuiqz2gha7o_27", "Tilburg, Netherlands (day): surfaces only, grounding found no objects in this 640x360 frame"),
+    ("Uuiqz2gha7o_27", "Tilburg, Netherlands (day), low-resolution 640x360 frame"),
 ]
 
 PANEL_W, PANEL_H = 640, 360
