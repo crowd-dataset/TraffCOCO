@@ -96,6 +96,7 @@ from annotation_pipeline.pipeline.conflict_check import (
 from annotation_pipeline.pipeline.shape_check import (
     POST_CLASS,
     check_upright_shapes,
+    remove_mask_duplicates,
 )
 from annotation_pipeline.prompts.load_prompt import load_prompt
 # Random frame downloader
@@ -5605,8 +5606,22 @@ def main() -> None:
                 post_class_id=_ontology_class_id(config, POST_CLASS),
             )
             logger.info("Upright shape check: {}", shape_counts)
+
+            # Two same-group boxes whose masks mostly overlap are one
+            # object: keep the larger (see shape_check.py).
+            duplicate_counts = remove_mask_duplicates(
+                final_detections_by_image,
+                class_groups={
+                    entry["class_name"]: entry.get("super_category") or ""
+                    for entry in _ontology_entries(config)
+                },
+            )
+            logger.info("Mask duplicate check: {}", duplicate_counts)
             for image_path in image_paths:
-                if image_path.name in shape_counts["changed"]:
+                if (
+                    image_path.name in shape_counts["changed"]
+                    or image_path.name in duplicate_counts["changed"]
+                ):
                     sam_engine.rerender_overlay(
                         image_path,
                         final_detections_by_image[image_path.name],

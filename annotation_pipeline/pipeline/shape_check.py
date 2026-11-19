@@ -166,3 +166,62 @@ def check_upright_shapes(
             counts["changed"].append(image_name)
 
     return counts
+
+
+# Two boxes whose SAM masks overlap this much (shared pixels over the
+# smaller mask) cover one object. In the 2026-11-18 global test, 35 of 232
+# wrong boxes were a second box or a fragment of an object that already
+# had one (half a car, a second box on one streetlight or sign).
+DUPLICATE_MASK_SHARE = 0.6
+MIN_DUPLICATE_MASK_PX = 20
+
+
+def remove_mask_duplicates(
+    detections_by_image: dict[str, list[dict[str, Any]]],
+    class_groups: dict[str, str],
+) -> dict[str, Any]:
+    """Drop the smaller of two same-group boxes whose masks mostly overlap.
+
+    Only boxes in the same ontology super-category are compared, so a rider
+    and the motorcycle under them are both kept. Changes
+    ``detections_by_image`` in place and returns the counts and the names
+    of the images it changed.
+    """
+
+    counts: dict[str, Any] = {"dropped": 0, "changed": []}
+
+    for image_name, detections in detections_by_image.items():
+        masks = [_load_mask(detection) for detection in detections]
+        areas = [int(mask.sum()) if mask is not None else 0 for mask in masks]
+        groups = [class_groups.get(_class_name(d)) for d in detections]
+        order = sorted(range(len(detections)), key=lambda i: -areas[i])
+        drop: set[int] = set()
+
+        for position, i in enumerate(order):
+            if i in drop or areas[i] < MIN_DUPLICATE_MASK_PX or not groups[i]:
+                continue
+            for j in order[position + 1:]:
+                if (
+                    j in drop
+                    or groups[j] != groups[i]
+                    or areas[j] < MIN_DUPLICATE_MASK_PX
+                    or masks[i].shape != masks[j].shape
+                ):
+                    continue
+                shared = int(np.logical_and(masks[i], masks[j]).sum())
+                if shared >= DUPLICATE_MASK_SHARE * areas[j]:
+                    drop.add(j)
+                    logger.info(
+                        "Duplicate check | image='{}' | dropped {} box {} "
+                        "({:.0%} of its mask lies on {} box {})",
+                        image_name, _class_name(detections[j]),
+                        detections[j].get("bbox"), shared / areas[j],
+                        _class_name(detections[i]), detections[i].get("bbox"),
+                    )
+
+        if drop:
+            detections[:] = [d for k, d in enumerate(detections) if k not in drop]
+            counts["dropped"] += len(drop)
+            counts["changed"].append(image_name)
+
+    return counts
