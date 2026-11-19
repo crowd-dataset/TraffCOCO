@@ -69142,6 +69142,11 @@
             "class": "guide_information_sign",
             "reason_for_confusion": "both are boards carrying text",
             "distinguishing_feature": "advertising or business content (brands, products, people, shop names) rather than road directions or traffic rules"
+          },
+          {
+            "class": "shop_sign",
+            "reason_for_confusion": "both are commercial boards on buildings",
+            "distinguishing_feature": "a billboard advertises products or brands on a large standalone or rooftop board; a shop sign names the business at its own frontage"
           }
         ]
       },
@@ -69311,6 +69316,11 @@
             "class": "guide_information_sign",
             "reason_for_confusion": "both are boards carrying text",
             "distinguishing_feature": "advertising or business content (brands, products, people, shop names) rather than road directions or traffic rules"
+          },
+          {
+            "class": "billboard",
+            "reason_for_confusion": "both are commercial boards on buildings",
+            "distinguishing_feature": "a shop sign names the business at its own frontage; a billboard advertises products or brands on a large standalone or rooftop board"
           }
         ]
       },

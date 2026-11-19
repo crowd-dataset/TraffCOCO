@@ -3787,6 +3787,21 @@ def _ontology_class_id(config, class_name: str) -> str | None:
     return None
 
 
+def _confusable_classes(entry: dict) -> list[str]:
+    """Classes the ontology lists as commonly confused with ``entry``."""
+
+    confusions = (
+        entry.get("common_confusions")
+        or (entry.get("relationships") or {}).get("common_confusions")
+        or []
+    )
+    return [
+        item["class"]
+        for item in confusions
+        if isinstance(item, dict) and item.get("class")
+    ]
+
+
 def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None:
     """Run conflict_check.py, then match rider labels to their vehicles."""
 
@@ -3818,6 +3833,10 @@ def _conflict_check(config, image_paths, detections_by_image, entries) -> None:
             },
             class_groups={
                 entry["class_name"]: entry.get("super_category") or ""
+                for entry in entries
+            },
+            class_confusions={
+                entry["class_name"]: _confusable_classes(entry)
                 for entry in entries
             },
         )

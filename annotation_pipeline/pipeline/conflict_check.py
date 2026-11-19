@@ -32,6 +32,17 @@ Every cyclist or motorcyclist box is asked too (cyclist, motorcyclist or
 pedestrian): the scene VLM called a motorcyclist a "bicycle rider" in the
 same frame, and a rider's description has only one box.
 
+Every sign, road-marking, roadside-infrastructure or temporary-object box
+is verified as well: the options are its own label, the classes the
+ontology lists as commonly confused with it, and "none of these". A box
+whose own label Qwen picks in neither option order, answering "none of
+these" at least once, is dropped (a sign box on
+foliage, a "zebra crossing" on a canal edge, a "construction ahead sign"
+on an excavator, a "streetlight" on empty sky in the 2026-11-18 check).
+Traffic lights are not verified: small night lights are often right but
+hard to judge from a crop. Cones, posts and bollards are not verified
+either: shape_check.py settles them from their SAM masks.
+
 Options are always ontology class names; a grounding label that is not a
 class (a garbled token such as ``sh<561>``) is never offered.
 
@@ -66,6 +77,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from annotation_pipeline.pipeline.shape_check import UPRIGHT_CLASSES
 from custom_logger import CustomLogger
 
 logger = CustomLogger(__name__)
@@ -75,6 +87,37 @@ CONFLICT_CONTAINMENT = 0.9
 
 # Ontology super-categories checked for extra boxes of one scene object.
 MOVER_GROUPS = frozenset({"vehicle", "road_user"})
+
+# Ontology super-categories whose boxes are verified one by one.
+VERIFY_GROUPS = frozenset({
+    "traffic_sign",
+    "road_marking",
+    "road_infrastructure",
+    "temporary_object",
+})
+MAX_CONFUSIONS = 3
+
+# A box labelled as a traffic sign is often a shop board, an advert, a
+# building plaque or the back of a sign (27 of 77 wrong sign boxes in the
+# 2026-11-18 global test). With only its own label and "none of these"
+# to choose from, the VLM mostly confirmed the label, so sign boxes are
+# also offered these look-alike classes and a "not a sign" answer.
+SIGN_GROUP = "traffic_sign"
+SIGN_LOOKALIKES = ("shop_sign", "billboard")
+NOT_A_SIGN = "not_a_sign"
+# Without this choice a real sign with the wrong subtype (a stop sign
+# boxed as "red route sign") was answered "not a sign" and dropped (8 of
+# 22 such drops in the 2026-11-19 sign test). It keeps the box as it is.
+OTHER_SIGN = "other_traffic_sign"
+
+# How a class is named in the question when its name reads badly.
+OPTION_TEXT = {
+    "unreadable_traffic_sign": "traffic sign (text not readable)",
+    "shop_sign": "shop or business sign (shop name, logo, phone number)",
+    "billboard": "advertisement board or billboard",
+    NOT_A_SIGN: "back of a sign, a window or wall, or no sign at all",
+    OTHER_SIGN: "a different traffic sign or road post (not the one named)",
+}
 
 RIDER_CLASSES = frozenset({"cyclist", "motorcyclist", "delivery_rider"})
 # Options for the rider-type question, in this order after the box's own.
@@ -92,6 +135,8 @@ RIDDEN_CLASSES = frozenset({
 })
 
 NONE_OPTION = "none of these"
+# Verify answers that reject the box.
+DROP_ANSWERS = frozenset({NONE_OPTION, NOT_A_SIGN})
 ANSWER_TOKENS = 8
 CROP_CONTEXT = 0.75
 CROP_MIN_SIDE = 512
@@ -175,6 +220,7 @@ def _is_mover(label: str, class_groups: dict[str, str]) -> bool:
 def find_conflicts(
     detections: list[dict[str, Any]],
     class_groups: dict[str, str] | None = None,
+    class_confusions: dict[str, list[str]] | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Return {index: {"kind", "candidates": [...], "partners": {label: [index]}}}.
 
@@ -279,6 +325,34 @@ def find_conflicts(
             "partners": {},
         }
 
+    # Signs, markings and roadside objects: verify the label itself.
+    for i, detection in enumerate(detections):
+        if (
+            i in conflicts
+            or "conflict_check" in detection
+            or boxes[i] is None
+            or class_groups.get(labels[i]) not in VERIFY_GROUPS
+            or labels[i] in UPRIGHT_CLASSES
+        ):
+            continue
+        confusions = [
+            c for c in (class_confusions or {}).get(labels[i], [])
+            if known(c) and not _same_class(c, labels[i])
+        ][:MAX_CONFUSIONS]
+        extra: list[str] = []
+        if class_groups.get(labels[i]) == SIGN_GROUP:
+            confusions += [
+                c for c in SIGN_LOOKALIKES
+                if known(c) and c != labels[i] and c not in confusions
+            ]
+            extra = [OTHER_SIGN, NOT_A_SIGN]
+        conflicts[i] = {
+            "kind": "verify",
+            "candidates": [labels[i]] + confusions,
+            "extra": extra,
+            "partners": {},
+        }
+
     return conflicts
 
 
@@ -322,10 +396,15 @@ def make_crop(
     return out_path
 
 
+def _option_text(option: str) -> str:
+
+    return OPTION_TEXT.get(option, option.replace("_", " "))
+
+
 def build_prompt(options: list[str]) -> str:
 
     lines = [
-        f"{letter}) {option.replace('_', ' ')}"
+        f"{letter}) {_option_text(option)}"
         for letter, option in zip(string.ascii_uppercase, options)
     ]
     return PROMPT.format(options="\n".join(lines))
@@ -344,7 +423,7 @@ def parse_answer(response: str, options: list[str]) -> str | None:
     lowered = text.lower()
     found = [
         option for option in options
-        if option.replace("_", " ") in lowered
+        if _option_text(option) in lowered
     ]
     return found[0] if len(found) == 1 else None
 
@@ -368,6 +447,8 @@ def _consistent_answer(
     model: Any,
     crop_path: Path,
     candidates: list[str],
+    kind: str | None = None,
+    extra: list[str] | None = None,
 ) -> tuple[str | None, list[str | None]]:
     """Ask once; if the answer would change the box, ask again with the
     options reversed and keep the answer only when both agree.
@@ -378,12 +459,26 @@ def _consistent_answer(
     the box's own label (the first candidate) costs one question.
     """
 
-    first = _ask(model, crop_path, candidates + [NONE_OPTION])
+    options = candidates + list(extra or []) + [NONE_OPTION]
+    first = _ask(model, crop_path, options)
     if first is None or first == candidates[0]:
         return first, [first]
 
-    second = _ask(model, crop_path, list(reversed(candidates)) + [NONE_OPTION])
-    return (first if second == first else None), [first, second]
+    second = _ask(model, crop_path, list(reversed(options)))
+    if second == first:
+        return first, [first, second]
+    # Verify: the box's own label was picked in neither order and "none"
+    # (or "not a sign") in at least one, so the label is rejected (an
+    # excavator boxed as a "construction ahead sign": none, then roadworks
+    # sign).
+    if (
+        kind == "verify"
+        and DROP_ANSWERS & {first, second}
+        and candidates[0] not in (first, second)
+        and OTHER_SIGN not in (first, second)
+    ):
+        return NONE_OPTION, [first, second]
+    return None, [first, second]
 
 
 def decide(
@@ -403,7 +498,7 @@ def decide(
     # the motorcycle in front of an SUV) counts with its new label.
     settled = list(labels)
     for j, answer in answers.items():
-        if answer and answer != NONE_OPTION and j in conflicts:
+        if answer and answer not in DROP_ANSWERS | {OTHER_SIGN} and j in conflicts:
             settled[j] = answer
 
     for i, conflict in conflicts.items():
@@ -413,15 +508,22 @@ def decide(
 
         if answer == own:
             action = "confirmed"
+        elif answer == OTHER_SIGN:
+            action = "unchanged_other_sign"
+        elif answer in DROP_ANSWERS and conflict.get("kind") == "verify":
+            action = "dropped_not_seen"
+            drop.add(i)
         elif answer and answer in conflict["partners"]:
+            # A partner box counts as confirmed unless the VLM gave it a
+            # different label (an unsure answer does not contradict it).
             confirmed = [
                 j for j in conflict["partners"][answer]
-                if answers.get(j, labels[j]) == labels[j]
+                if answers.get(j) in (labels[j], None)
             ]
             if confirmed:
                 action = "dropped_duplicate"
                 drop.add(i)
-        elif answer and answer != NONE_OPTION and any(
+        elif answer and answer not in DROP_ANSWERS and any(
             j != i
             and settled[j] == answer
             and boxes[j] is not None
@@ -430,7 +532,7 @@ def decide(
             for j in range(len(detections))
         ):
             action = "unchanged_neighbour_answer"
-        elif answer and answer != NONE_OPTION:
+        elif answer and answer not in DROP_ANSWERS:
             action = "relabelled"
             detection = detections[i]
             alternatives = [
@@ -470,6 +572,7 @@ def run_conflict_check(
     detections_by_image: dict[str, list[dict[str, Any]]],
     class_ids: dict[str, str],
     class_groups: dict[str, str] | None = None,
+    class_confusions: dict[str, list[str]] | None = None,
 ) -> dict[str, int]:
     """Check every conflict box with the scene VLM; change detections in place."""
 
@@ -477,6 +580,7 @@ def run_conflict_check(
         image_path: find_conflicts(
             detections_by_image.get(image_path.name, []),
             class_groups,
+            class_confusions,
         )
         for image_path in image_paths
     }
@@ -515,6 +619,8 @@ def run_conflict_check(
                             model,
                             crop_path,
                             conflict["candidates"],
+                            conflict.get("kind"),
+                            conflict.get("extra"),
                         )
                     except Exception as exc:
                         logger.warning(
