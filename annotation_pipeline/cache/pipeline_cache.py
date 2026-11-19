@@ -310,6 +310,9 @@ class PipelineCache:
 
         if inserted == 0:
 
+            # Leave no empty entry behind, so later stages skip the image.
+            self._cache.pop(image_name, None)
+
             raise ValueError(
                 f"No valid Scene Understanding objects found for '{image_name}'."
             )
@@ -319,6 +322,7 @@ class PipelineCache:
             inserted,
             image_name,
         )
+
     def get_scene_objects(
         self,
         image_name: str,

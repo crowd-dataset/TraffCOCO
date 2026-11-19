@@ -27,16 +27,85 @@ from __future__ import annotations
 import json
 from custom_logger import CustomLogger
 import re
-import traceback
 from pathlib import Path
 from typing import Any
-import os
 from annotation_pipeline.cache.pipeline_cache import PipelineCache
 from annotation_pipeline.configs.settings import PipelineConfig
 from annotation_pipeline.models.vlm.base_vlm import BaseVLM
 from annotation_pipeline.prompts.load_prompt import load_prompt
 
 logger = CustomLogger(__name__)
+
+# With greedy decoding Qwen3-VL sometimes writes the same entry again and
+# again, or spends its whole token budget on long sign/marking entries,
+# and never names the cars in the frame (28 of 98 frames in the
+# 2026-11-18 global test). An answer with this many repeated entries, or
+# one cut off before its closing bracket, gets a short follow-up question
+# for the vehicles and road users (asking it to "list what is missing"
+# only got [] back).
+LOOP_REPEATS = 3
+FOLLOW_UP_MAX_OBJECTS = 15
+
+FOLLOW_UP_PROMPT = """You are an expert traffic scene annotator.
+
+List every vehicle and every road user visible in this dashcam image:
+cars, SUVs, vans, pickup trucks, trucks, buses, taxis, motorcycles,
+bicycles, auto-rickshaws, pedestrians, cyclists and motorcyclists.
+Include parked, oncoming, distant and partly hidden ones, and the vehicle
+directly ahead.
+
+Give one entry per visually different type (for example "white sedan",
+"red hatchback", "city bus", "pedestrian"); do not repeat an entry.
+Return at most {max_objects} entries as a JSON array, nothing else:
+
+[
+    {{
+        "object_id": 1,
+        "observed_object": "...",
+        "object_group": "vehicle" or "road_user",
+        "description": "...",
+        "confidence": 0.0 to 1.0
+    }}
+]
+"""
+
+
+def _entry_key(obj: dict) -> tuple[str, str]:
+    """Name and description of an entry, used to spot repeats."""
+
+    return (
+        str(obj.get("observed_object", "")).strip().lower(),
+        str(obj.get("description", "")).strip().lower(),
+    )
+
+
+def drop_repeated_entries(objects: list[dict]) -> tuple[list[dict], int]:
+    """Keep the first of entries with the same name and description."""
+
+    kept, seen = [], set()
+
+    for obj in objects:
+
+        key = _entry_key(obj)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        kept.append(obj)
+
+    return kept, len(objects) - len(kept)
+
+
+def looks_cut_off(response: str) -> bool:
+    """True when the answer stops before its JSON array is closed."""
+
+    text = response.strip()
+
+    if text.endswith("```"):
+        text = text[:-3].rstrip()
+
+    return not text.endswith("]")
 
 
 class SceneUnderstandingEngine:
@@ -225,6 +294,30 @@ class SceneUnderstandingEngine:
                 continue
 
             # ----------------------------------------------------------
+            # Repeated or cut-off answer: drop the repeats and ask once
+            # more for the objects it never reached
+            # ----------------------------------------------------------
+
+            objects, repeats = drop_repeated_entries(objects)
+            cut_off = looks_cut_off(raw_response)
+
+            if repeats >= LOOP_REPEATS or cut_off:
+
+                logger.warning(
+                    "Scene Understanding for '{}' looped ({} repeated "
+                    "entries, cut off: {}). Asking for the missing objects.",
+                    image_name,
+                    repeats,
+                    cut_off,
+                )
+
+                objects = objects + self._ask_for_missing_objects(
+                    image_path,
+                    objects,
+                    raw_dir,
+                )
+
+            # ----------------------------------------------------------
             # Limit object count (before saving, so the parsed file
             # that Ontology Reasoning reads matches the cache)
             # ----------------------------------------------------------
@@ -270,10 +363,23 @@ class SceneUnderstandingEngine:
             # Cache
             # ----------------------------------------------------------
 
-            cache.add_scene_objects(
-                image_name=image_name,
-                objects=objects,
-            )
+            # A frame with no usable object (an empty road, say) is
+            # skipped like an unparseable answer; the other images of
+            # the batch go on.
+            try:
+                cache.add_scene_objects(
+                    image_name=image_name,
+                    objects=objects,
+                )
+            except ValueError as exc:
+                logger.error(
+                    "Scene Understanding failed for '{}': {}",
+                    image_name,
+                    exc,
+                )
+                parsed_file.unlink(missing_ok=True)
+                all_objects.append([])
+                continue
 
             if self.config.pipeline.save_intermediate_cache:
 
@@ -291,6 +397,77 @@ class SceneUnderstandingEngine:
             all_objects.append(objects)
 
         return all_objects
+
+    # -------------------------------------------------------------------------
+    # Follow-up for looping answers
+    # -------------------------------------------------------------------------
+
+    def _ask_for_missing_objects(
+        self,
+        image_path: Path,
+        objects: list[dict[str, Any]],
+        raw_dir: Path,
+    ) -> list[dict[str, Any]]:
+        """Ask once more for the vehicles and road users in a looping frame.
+
+        Returns the new entries only, numbered after the existing ones.
+        Any failure returns [] and leaves the first answer as it is.
+        """
+
+        names = sorted({_entry_key(obj)[0] for obj in objects if _entry_key(obj)[0]})
+        prompt = FOLLOW_UP_PROMPT.format(
+            max_objects=FOLLOW_UP_MAX_OBJECTS,
+        )
+
+        try:
+            result = self.model.infer(
+                image_paths=[image_path],
+                prompt=prompt,
+            )
+            response = result["responses"][0]
+            self.last_generation_time += result["generation_time"]
+            self.last_generated_tokens += result["generated_tokens"]
+
+            if self.config.pipeline.save_raw_outputs:
+                (raw_dir / f"{image_path.stem}_follow_up.txt").write_text(
+                    response,
+                    encoding="utf-8",
+                )
+
+            extra = self._parse_json_response(response)
+
+        except Exception as exc:  # the first answer still stands
+            logger.error(
+                "Follow-up question failed for '{}': {}",
+                image_path.name,
+                exc,
+            )
+            return []
+
+        known = {_entry_key(obj) for obj in objects}
+        extra, _ = drop_repeated_entries(
+            [obj for obj in extra if _entry_key(obj) not in known]
+        )
+        extra = [obj for obj in extra if _entry_key(obj)[0] not in names]
+        extra = extra[:FOLLOW_UP_MAX_OBJECTS]
+
+        next_id = 1 + max(
+            (obj["object_id"] for obj in objects
+             if isinstance(obj.get("object_id"), int)),
+            default=0,
+        )
+
+        for offset, obj in enumerate(extra):
+            obj["object_id"] = next_id + offset
+
+        logger.info(
+            "Follow-up for '{}' added {} object(s): {}",
+            image_path.name,
+            len(extra),
+            [obj.get("observed_object") for obj in extra],
+        )
+
+        return extra
 
     # -------------------------------------------------------------------------
     # Normalizing
