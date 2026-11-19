@@ -134,6 +134,26 @@ RIDDEN_CLASSES = frozenset({
     "xich_lo",
 })
 
+# Vehicle traffic lights: the state comes from the scene description of
+# the light and is shared by every box grounded to it, so a red light
+# ahead and a green one across the junction got the same label (light
+# boxes 51% right in the 2026-11-18 global test). Each box is asked which
+# lamp is lit; the stateless class is chosen when no lit lamp shows.
+LIGHT_STATE_CLASSES = (
+    "traffic_light_red",
+    "traffic_light_yellow",
+    "traffic_light_green",
+)
+LIGHT_NO_STATE = "traffic_light_3_phase"
+LIGHT_CLASSES = frozenset(LIGHT_STATE_CLASSES + (LIGHT_NO_STATE, "traffic_light_off"))
+LIGHT_QUESTION_TEXT = {
+    "traffic_light_red": "traffic light with the RED lamp lit",
+    "traffic_light_yellow": "traffic light with the YELLOW (amber) lamp lit",
+    "traffic_light_green": "traffic light with the GREEN lamp lit",
+    LIGHT_NO_STATE: "traffic light with no lit lamp visible (seen from the back or side, or dark)",
+    "traffic_light_off": "traffic light with no lit lamp visible (seen from the back or side, or dark)",
+}
+
 NONE_OPTION = "none of these"
 # Verify answers that reject the box.
 DROP_ANSWERS = frozenset({NONE_OPTION, NOT_A_SIGN})
@@ -308,6 +328,25 @@ def find_conflicts(
                 "partners": {},
             }
 
+    # Traffic-light state is checked for every vehicle traffic-light box.
+    for i, detection in enumerate(detections):
+        if (
+            i in conflicts
+            or "conflict_check" in detection
+            or boxes[i] is None
+            or labels[i] not in LIGHT_CLASSES
+        ):
+            continue
+        own = LIGHT_NO_STATE if labels[i] == "traffic_light_off" else labels[i]
+        conflicts[i] = {
+            "kind": "light_state",
+            "candidates": [labels[i]] + [
+                c for c in LIGHT_STATE_CLASSES + (LIGHT_NO_STATE,)
+                if c != own and known(c)
+            ],
+            "partners": {},
+        }
+
     # Rider type (cyclist vs motorcyclist) is checked for every rider box.
     for i, detection in enumerate(detections):
         if (
@@ -396,21 +435,27 @@ def make_crop(
     return out_path
 
 
-def _option_text(option: str) -> str:
+def _option_text(option: str, kind: str | None = None) -> str:
 
+    if kind == "light_state" and option in LIGHT_QUESTION_TEXT:
+        return LIGHT_QUESTION_TEXT[option]
     return OPTION_TEXT.get(option, option.replace("_", " "))
 
 
-def build_prompt(options: list[str]) -> str:
+def build_prompt(options: list[str], kind: str | None = None) -> str:
 
     lines = [
-        f"{letter}) {_option_text(option)}"
+        f"{letter}) {_option_text(option, kind)}"
         for letter, option in zip(string.ascii_uppercase, options)
     ]
     return PROMPT.format(options="\n".join(lines))
 
 
-def parse_answer(response: str, options: list[str]) -> str | None:
+def parse_answer(
+    response: str,
+    options: list[str],
+    kind: str | None = None,
+) -> str | None:
     """Map the model's reply to one of ``options`` (None if unclear)."""
 
     text = (response or "").strip()
@@ -423,7 +468,7 @@ def parse_answer(response: str, options: list[str]) -> str | None:
     lowered = text.lower()
     found = [
         option for option in options
-        if _option_text(option) in lowered
+        if _option_text(option, kind).lower() in lowered
     ]
     return found[0] if len(found) == 1 else None
 
@@ -437,10 +482,15 @@ def _response_text(result: Any) -> str:
     return first if isinstance(first, str) else str(first)
 
 
-def _ask(model: Any, crop_path: Path, options: list[str]) -> str | None:
+def _ask(
+    model: Any,
+    crop_path: Path,
+    options: list[str],
+    kind: str | None = None,
+) -> str | None:
 
-    result = model.infer(image_paths=[crop_path], prompt=build_prompt(options))
-    return parse_answer(_response_text(result), options)
+    result = model.infer(image_paths=[crop_path], prompt=build_prompt(options, kind))
+    return parse_answer(_response_text(result), options, kind)
 
 
 def _consistent_answer(
@@ -460,11 +510,11 @@ def _consistent_answer(
     """
 
     options = candidates + list(extra or []) + [NONE_OPTION]
-    first = _ask(model, crop_path, options)
+    first = _ask(model, crop_path, options, kind)
     if first is None or first == candidates[0]:
         return first, [first]
 
-    second = _ask(model, crop_path, list(reversed(options)))
+    second = _ask(model, crop_path, list(reversed(options)), kind)
     if second == first:
         return first, [first, second]
     # Verify: the box's own label was picked in neither order and "none"
