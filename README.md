@@ -84,11 +84,11 @@ flowchart LR
 | Stage | Model | What it does |
 |---|---|---|
 | Frame sampling | – | Downloads CROWD videos and takes frames every `interval_seconds` (20), filtered by place, time of day, vehicle and video ID. |
-| Scene understanding | Gemma 3 12B (default), Gemma 4, Qwen3-VL-8B or SmolVLM2 | Lists every traffic-relevant object with a description, light state and, for signs, the exact text in its original script, its language and English meaning. The prompt is chosen in the config. |
+| Scene understanding | Gemma 3 12B (default), Gemma 4, Qwen3-VL-8B or SmolVLM2 | Lists every traffic-relevant object with a description, light state and, for signs, the exact text in its original script, its language and English meaning. The prompt is chosen in the config. An answer that repeats itself or is cut off by the token limit loses its repeats and gets one short follow-up question for the vehicles and road users in the frame. |
 | Ontology reasoning | `BAAI/bge-base-en-v1.5` + FAISS | Maps each object to one of 416 ontology classes and the prompt used for grounding (`annotation_pipeline/models/ontology/traffic_ontology_v2.json`). A sign whose words the chosen class cannot represent becomes `guide_information_sign`, and the replaced class is kept for review. |
-| Grounding | `nvidia/LocateAnything-3B` | Finds boxes for each class prompt. |
+| Grounding | `nvidia/LocateAnything-3B` | Finds boxes for each class prompt. Names with leaked coordinate tokens (`traffic<799>`) are dropped, and fused names (`carUV` from "car" and "SUV") are matched back to the prompt name they start with. |
 | Annotation | – | Links boxes to scene objects and removes slivers (under 6 px or 64 px²), implausible sizes and duplicates of the same object, keeping distant small objects such as traffic lights. Lane lines and hatched areas are taken from the surface masks instead of boxes; compact painted symbols (arrows, crossings, stop lines) stay objects. |
-| Conflict check | Scene VLM | When two labels claim one box (merged duplicates, or a box of another class nested in it), the VLM sees a crop with the box drawn in red and picks the label; the box is kept, relabelled or dropped as a duplicate. The same is done for road-user and vehicle boxes of a description that was grounded to more than one box, with every road-user and vehicle label in the frame as options. Every cyclist or motorcyclist box is also asked its rider type, and a rider then takes the class of the motorcycle or bicycle under it. An answer that would change a box is asked again with the options reversed and used only if both agree (small VLMs favour options by position); a relabel is also skipped when the chosen label belongs to a neighbour lying inside the box. About 1.2 s per box; 20 boxes over the 6 example frames. |
+| Conflict check | Scene VLM | When two labels claim one box (merged duplicates, or a box of another class nested in it), the VLM sees a crop with the box drawn in red and picks the label; the box is kept, relabelled or dropped as a duplicate. The same is done for road-user and vehicle boxes of a description that was grounded to more than one box, with every road-user and vehicle label in the frame as options. Every cyclist or motorcyclist box is also asked its rider type, and a rider then takes the class of the motorcycle or bicycle under it. An answer that would change a box is asked again with the options reversed and used only if both agree (small VLMs favour options by position); a relabel is also skipped when the chosen label belongs to a neighbour lying inside the box. Sign, road-marking, roadside and temporary-object boxes are verified one by one against their own label, the classes the ontology lists as confusable with it, and "none of these"; sign boxes are also offered shop sign, billboard, "a different traffic sign" (kept as it is) and "not a sign" (dropped). About 1.2 s per question. |
 | Instance masks | SAM 2.1 Hiera Large | One mask per final box. Cones, posts and bollards are checked against their mask: boxes wider than tall are dropped, and a "cone" that does not narrow becomes `flexible_post`. |
 | Surface segmentation | `facebook/mask2former-swin-large-mapillary-vistas-semantic` | Per-pixel labels for 26 road and roadside classes: road, sidewalk, curb, bike lane, crossings, lane markings, terrain, vegetation, barriers, bridges and more. Also checks boxes: line markings come from these masks, and a guardrail or barrier whose SAM mask lies mostly on road, sidewalk or curb is dropped. |
 | Road perception (optional) | YOLOPv2 | Drivable area and lane lines. |
@@ -145,12 +145,34 @@ An object annotation carries the usual COCO fields plus its provenance. Signs wi
 | Tilburg, Netherlands | 4 | 4 | 0 | 0 |
 | **Total** | **86** | **60** | **9** | **17** |
 
-Vehicles, people, riders, flexible posts, streetlights, traffic lights and the Japanese guide sign were right. The nine errors are mostly signs and infrastructure: a sign box on foliage, a "zebra crossing" on a canal edge, a "construction ahead sign" on an excavator, a shop sign labelled `billboard`, boxes on empty sky or bare wall, a road-arrow box reaching down to the dashboard, a sliver beside a car, and one box over two parked vehicles. Some objects get no box at all (a cyclist on a median, a person standing behind a rider, a shipping container, bollards). This is a small pilot sample, not a benchmark. Known issues that phase 2 must measure and fix:
+Vehicles, people, riders, flexible posts, streetlights, traffic lights and the Japanese guide sign were right. The nine errors are mostly signs and infrastructure: a sign box on foliage, a "zebra crossing" on a canal edge, a "construction ahead sign" on an excavator, a shop sign labelled `billboard`, boxes on empty sky or bare wall, a road-arrow box reaching down to the dashboard, a sliver beside a car, and one box over two parked vehicles. Some objects get no box at all (a cyclist on a median, a person standing behind a rider, a shipping container, bollards). This is a small pilot sample, not a benchmark.
 
-- **Scene-model reliability.** Qwen3-VL-8B sometimes loops, repeating objects until its token limit; the parser keeps every complete object. Gemma models are the default.
+**Global check, 100 random frames.** To see how the pipeline holds up outside these six frames, 100 frames were cut at random times from CROWD videos covering 38 countries (Europe 43, Asia 26, North America 14, Africa 9, Oceania 5, South America 3; 87 by day, 13 by night) and every box was checked by eye in the same way. Of 779 decidable boxes, 543 were correct (70%); 61 more could not be judged, and 179 clearly visible objects had no box. Two frames showed no traffic object the scene model could name.
+
+| Object group | Correct | Wrong | Accuracy |
+|---|---|---|---|
+| Road users | 30 | 2 | 94% |
+| Vehicles | 260 | 63 | 81% |
+| Road infrastructure | 159 | 49 | 76% |
+| Traffic lights | 19 | 18 | 51% |
+| Traffic signs | 53 | 69 | 43% |
+| Road markings | 6 | 15 | 29% |
+
+Smaller groups (temporary objects, animals and labels outside the ontology) are left out of the table.
+
+By continent: Asia 80%, Africa 73%, Europe 69%, South America 67%, North America 54%, Oceania 53%; night frames (75%) were no worse than day frames (69%). The two largest causes were fixed afterwards and checked again on the worst frames of this run:
+
+| Fix | Frames | Before | After |
+|---|---|---|---|
+| Scene model looped (28 of 98 frames) and never named the cars: follow-up question for vehicles and road users | 8 looping frames | 30 boxes correct, 42 objects missed | 72 correct, 13 missed |
+| Shop boards, adverts and backs of signs labelled as traffic signs; garbled grounding names: sign choices in the conflict check, name filter | 10 frames with the most wrong sign boxes | 60% of boxes correct, 42 wrong sign boxes | 71%, 15 wrong sign boxes |
+
+Known issues that phase 2 must measure and fix:
+
+- **Scene-model reliability.** Qwen3-VL-8B loops in about a quarter of frames, repeating one object until its token limit. The repeats are dropped and a follow-up question recovers most vehicles and road users, but signs and markings it never reached stay missing. Gemma models are the default.
 - **Grounding.** LocateAnything sometimes boxes the wrong thing (a pillar as a "flexible post", tail lights as traffic lights, a curb as a guardrail). The mask checks after SAM 2 and surface segmentation catch some of these. It returned no boxes for a low-resolution (640×360) frame in some runs. It also samples at temperature 0.7, so runs are not deterministic.
 - **One description, several boxes.** A light's state, or a sign's text, is decided once per described object. When that object's query returns several boxes, the state is shared by all of them, and the sign text is attached to none (it is unknown which box says it).
-- **Fine-grained confusions.** Shop signs are often labelled `billboard`, and small or blurred night lights are hard to tell apart (headlight, streetlight or traffic light). A description sometimes grounds to an object of another class (an "auto-rickshaw" box on a motorcycle); the conflict check catches this for road users and vehicles, but not yet for signs or infrastructure. Some boxes span two neighbouring objects. Flexible posts called "traffic cone" by the scene model are now caught by a shape check on the SAM mask (a cone narrows towards the top, a post does not).
+- **Fine-grained confusions.** A real sign often gets the wrong sign class (a keep-right sign as `roundabout_sign`, a speed limit as `guide_information_sign`); the conflict check keeps such a box but cannot yet find the right class, which needs the sign's meaning mapped back to the ontology. Traffic-light states are wrong in about half the light boxes (red and green swapped, or a state on the back of a light), and utility poles are often called `streetlight`. Small or blurred night lights are hard to tell apart (headlight, streetlight or traffic light). Some boxes span a row of parked cars or two neighbouring objects. Flexible posts called "traffic cone" by the scene model are now caught by a shape check on the SAM mask (a cone narrows towards the top, a post does not).
 - **Throughput.** Measured on the DGX Spark: the VLM is the bottleneck (minutes per frame for large models), LocateAnything takes tens of seconds per frame, and SAM 2 and Mask2Former take under two seconds. Phase 1 needs batched VLM serving on HPC.
 
 ## Getting started
