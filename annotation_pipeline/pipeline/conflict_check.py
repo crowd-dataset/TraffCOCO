@@ -25,8 +25,18 @@ grounded to more than one box (counting boxes merged away by
 de-duplication). Each scene object is one thing the VLM saw, so its extra
 boxes are often other objects: in the same frame "auto-rickshaw" also
 boxed a motorcycle and "motorcycle with rider" also boxed a small white
-car, with no competing box to flag them. The options are its own label
-and every other road-user or vehicle label in the frame.
+car, with no competing box to flag them. The options are its own label,
+every other road-user or vehicle label in the frame, the common classes
+of its kind, "several objects" and "not a vehicle or person". Every other
+vehicle and road-user box gets the same question without the frame's
+labels.
+
+The box's own label is listed first, and small VLMs favour the first
+option, so a vehicle or person box is asked in both orders even when the
+first answer keeps its label. When the two answers differ and one of them
+is its own rare subtype (a hatchback boxed as "kei car" or "pickup truck"
+in the 2026-11-19 class test), the common class from the other order is
+used.
 
 Every cyclist or motorcyclist box is asked too (cyclist, motorcyclist or
 pedestrian): the scene VLM called a motorcyclist a "bicycle rider" in the
@@ -105,18 +115,29 @@ MAX_CONFUSIONS = 3
 SIGN_GROUP = "traffic_sign"
 SIGN_LOOKALIKES = ("shop_sign", "billboard")
 NOT_A_SIGN = "not_a_sign"
-# Without this choice a real sign with the wrong subtype (a stop sign
-# boxed as "red route sign") was answered "not a sign" and dropped (8 of
-# 22 such drops in the 2026-11-19 sign test). It keeps the box as it is.
-OTHER_SIGN = "other_traffic_sign"
+# A real sign with the wrong subtype (a stop sign boxed as "red route
+# sign") was answered "not a sign" and dropped (8 of 22 such drops in the
+# first 2026-11-19 sign test). A "different traffic sign" answer that kept
+# the box was rarely picked: in the class tests real direction, parking and
+# warning signs were still answered "not a sign" or "shop sign" (5 of 9
+# wrong drops), with the 8B and the 32B model alike. So every sign box is
+# also offered the general class, named by the kinds of sign it covers; it
+# is the ontology's class for a sign whose exact type is not known. Asked
+# on the 35 reviewed sign boxes of both class tests, it dropped 4 more
+# name boards but saved no real sign: the general class picked in one
+# order only kept a real parking sign and two non-sign boxes alike, so
+# such a split still drops the box.
+GENERAL_SIGN = "unreadable_traffic_sign"
 
 # How a class is named in the question when its name reads badly.
 OPTION_TEXT = {
-    "unreadable_traffic_sign": "traffic sign (text not readable)",
+    GENERAL_SIGN: (
+        "a traffic sign of another type, or whose type cannot be read "
+        "(warning, regulatory, direction or place names, parking, information)"
+    ),
     "shop_sign": "shop or business sign (shop name, logo, phone number)",
     "billboard": "advertisement board or billboard",
     NOT_A_SIGN: "back of a sign, a window or wall, or no sign at all",
-    OTHER_SIGN: "a different traffic sign or road post (not the one named)",
 }
 
 RIDER_CLASSES = frozenset({"cyclist", "motorcyclist", "delivery_rider"})
@@ -154,11 +175,53 @@ LIGHT_QUESTION_TEXT = {
     "traffic_light_off": "traffic light with no lit lamp visible (seen from the back or side, or dark)",
 }
 
+# Every vehicle and road-user box is checked against common classes of
+# its kind. In the 2026-11-18 global test, 53 of 232 wrong boxes were
+# vehicles or people with the wrong class (a trailer as "suv", an ordinary
+# hatchback as "kei car", a rider as "pedestrian") or on no vehicle at
+# all (a window, a fence, a poster); a general class such as "car" is
+# right for the rare subtypes.
+MOVER_OPTIONS = {
+    "vehicle": (
+        "car", "suv", "van", "pickup_truck", "truck", "city_bus",
+        "motorcycle", "bicycle", "pedestrian",
+    ),
+    "road_user": (
+        "pedestrian", "cyclist", "motorcyclist", "car", "motorcycle", "bicycle",
+    ),
+}
+NOT_A_MOVER = "not_a_vehicle_or_person"
+# One box over a row of cars, two streetlights or two stacked signs (22
+# of 232 wrong boxes) is dropped.
+SEVERAL_OBJECTS = "several_objects"
+STREETLIGHT = "streetlight"
+NOT_A_LAMP = "pole_without_lamp"
+
+OPTION_TEXT.update({
+    "suv": "SUV",
+    "city_bus": "bus",
+    NOT_A_MOVER: "not a vehicle or person (a building, sign, picture, pole, plant or empty road)",
+    SEVERAL_OBJECTS: "two or more separate objects (the box covers several)",
+    NOT_A_LAMP: "a pole without a lamp, a tree or a building",
+})
+
 NONE_OPTION = "none of these"
 # Verify answers that reject the box.
-DROP_ANSWERS = frozenset({NONE_OPTION, NOT_A_SIGN})
+DROP_ANSWERS = frozenset({NONE_OPTION, NOT_A_SIGN, NOT_A_MOVER, SEVERAL_OBJECTS, NOT_A_LAMP})
+# Vehicle and road-user questions; their boxes are asked in both orders.
+MOVER_KINDS = frozenset({"extra_box", "mover_verify"})
+COMMON_MOVERS = frozenset(c for options in MOVER_OPTIONS.values() for c in options)
+VERIFY_KINDS = frozenset({"verify"}) | MOVER_KINDS
 ANSWER_TOKENS = 8
 CROP_CONTEXT = 0.75
+# A sign crop shows at least this many frame pixels across. With the
+# margin alone, a 20 px sign became a 35 px crop blown up to 512 px, and
+# the scene VLM answered "not a sign" for real direction, warning and
+# regulatory signs (2026-11-19 class tests) that the pole and the road
+# around them make plain. On the 35 reviewed sign boxes of those tests a
+# 200 px window kept a real parking sign and changed nothing else; 400 px
+# saved none and dropped two right boxes.
+SIGN_MIN_WINDOW = 200
 CROP_MIN_SIDE = 512
 
 PROMPT = (
@@ -321,10 +384,19 @@ def find_conflicts(
         candidates = [labels[i]] + [
             m for m in mover_labels if not _same_class(m, labels[i])
         ]
+        # The frame's labels alone kept wrong subtypes (an ordinary
+        # hatchback confirmed as "kei car" when only kei car, van and
+        # pickup were offered; 14 of 15 wrong vehicle types in the
+        # 2026-11-19 class test came through this question).
+        candidates += [
+            c for c in MOVER_OPTIONS.get(class_groups.get(labels[i]), ())
+            if known(c) and not any(_same_class(c, k) for k in candidates)
+        ]
         if len(candidates) > 1:
             conflicts[i] = {
                 "kind": "extra_box",
                 "candidates": candidates,
+                "extra": [SEVERAL_OBJECTS, NOT_A_MOVER],
                 "partners": {},
             }
 
@@ -344,6 +416,27 @@ def find_conflicts(
                 c for c in LIGHT_STATE_CLASSES + (LIGHT_NO_STATE,)
                 if c != own and known(c)
             ],
+            "partners": {},
+        }
+
+    # Every other vehicle and road-user box: its class, or no single mover.
+    for i, detection in enumerate(detections):
+        group = class_groups.get(labels[i])
+        if (
+            i in conflicts
+            or "conflict_check" in detection
+            or boxes[i] is None
+            or group not in MOVER_OPTIONS
+            or labels[i] in RIDER_CLASSES
+        ):
+            continue
+        conflicts[i] = {
+            "kind": "mover_verify",
+            "candidates": [labels[i]] + [
+                c for c in MOVER_OPTIONS[group]
+                if c != labels[i] and known(c)
+            ],
+            "extra": [SEVERAL_OBJECTS, NOT_A_MOVER],
             "partners": {},
         }
 
@@ -378,17 +471,22 @@ def find_conflicts(
             c for c in (class_confusions or {}).get(labels[i], [])
             if known(c) and not _same_class(c, labels[i])
         ][:MAX_CONFUSIONS]
-        extra: list[str] = []
+        extra: list[str] = [SEVERAL_OBJECTS]
+        min_window = 0
         if class_groups.get(labels[i]) == SIGN_GROUP:
             confusions += [
-                c for c in SIGN_LOOKALIKES
+                c for c in SIGN_LOOKALIKES + (GENERAL_SIGN,)
                 if known(c) and c != labels[i] and c not in confusions
             ]
-            extra = [OTHER_SIGN, NOT_A_SIGN]
+            extra = [NOT_A_SIGN, SEVERAL_OBJECTS]
+            min_window = SIGN_MIN_WINDOW
+        elif labels[i] == STREETLIGHT:
+            extra = [NOT_A_LAMP, SEVERAL_OBJECTS]
         conflicts[i] = {
             "kind": "verify",
             "candidates": [labels[i]] + confusions,
             "extra": extra,
+            "min_window": min_window,
             "partners": {},
         }
 
@@ -399,15 +497,22 @@ def make_crop(
     image: Image.Image,
     box: tuple[float, float, float, float],
     out_path: Path,
+    min_window: float = 0,
 ) -> Path:
-    """Save a context crop around ``box`` with the box drawn in red."""
+    """Save a context crop around ``box`` with the box drawn in red.
+
+    The crop is at least ``min_window`` frame pixels wide and high (less
+    at the frame edge).
+    """
 
     x1, y1, x2, y2 = box
     margin = CROP_CONTEXT * max(x2 - x1, y2 - y1)
-    left = max(0, int(x1 - margin))
-    top = max(0, int(y1 - margin))
-    right = min(image.width, int(x2 + margin))
-    bottom = min(image.height, int(y2 + margin))
+    margin_x = max(margin, (min_window - (x2 - x1)) / 2)
+    margin_y = max(margin, (min_window - (y2 - y1)) / 2)
+    left = max(0, int(x1 - margin_x))
+    top = max(0, int(y1 - margin_y))
+    right = min(image.width, int(x2 + margin_x))
+    bottom = min(image.height, int(y2 + margin_y))
 
     crop = image.crop((left, top, right, bottom)).convert("RGB")
     scale = max(1.0, CROP_MIN_SIDE / max(crop.width, crop.height))
@@ -511,21 +616,32 @@ def _consistent_answer(
 
     options = candidates + list(extra or []) + [NONE_OPTION]
     first = _ask(model, crop_path, options, kind)
-    if first is None or first == candidates[0]:
+    if first is None or (first == candidates[0] and kind not in MOVER_KINDS):
         return first, [first]
 
     second = _ask(model, crop_path, list(reversed(options)), kind)
     if second == first:
         return first, [first, second]
+    # A rare vehicle subtype picked in one order only gives way to a
+    # common class picked in the other.
+    if (
+        kind in MOVER_KINDS
+        and candidates[0] in (first, second)
+        and candidates[0] not in COMMON_MOVERS
+    ):
+        other = second if first == candidates[0] else first
+        if other in COMMON_MOVERS:
+            return other, [first, second]
     # Verify: the box's own label was picked in neither order and "none"
     # (or "not a sign") in at least one, so the label is rejected (an
     # excavator boxed as a "construction ahead sign": none, then roadworks
     # sign).
     if (
-        kind == "verify"
+        kind in VERIFY_KINDS
         and DROP_ANSWERS & {first, second}
         and candidates[0] not in (first, second)
-        and OTHER_SIGN not in (first, second)
+        # A vehicle or person is dropped only when both orders reject it.
+        and (kind not in MOVER_KINDS or {first, second} <= DROP_ANSWERS)
     ):
         return NONE_OPTION, [first, second]
     return None, [first, second]
@@ -548,7 +664,7 @@ def decide(
     # the motorcycle in front of an SUV) counts with its new label.
     settled = list(labels)
     for j, answer in answers.items():
-        if answer and answer not in DROP_ANSWERS | {OTHER_SIGN} and j in conflicts:
+        if answer and answer not in DROP_ANSWERS and j in conflicts:
             settled[j] = answer
 
     for i, conflict in conflicts.items():
@@ -558,9 +674,7 @@ def decide(
 
         if answer == own:
             action = "confirmed"
-        elif answer == OTHER_SIGN:
-            action = "unchanged_other_sign"
-        elif answer in DROP_ANSWERS and conflict.get("kind") == "verify":
+        elif answer in DROP_ANSWERS and conflict.get("kind") in VERIFY_KINDS:
             action = "dropped_not_seen"
             drop.add(i)
         elif answer and answer in conflict["partners"]:
@@ -599,6 +713,7 @@ def decide(
 
         detections[i]["conflict_check"] = {
             "kind": conflict.get("kind"),
+            "label_before": own,
             "candidates": conflict["candidates"],
             "answer": answer,
             "action": action,
@@ -663,6 +778,7 @@ def run_conflict_check(
                         image,
                         _box(detections[i]),
                         out_dir / "crops" / f"{image_path.stem}_box{i}.png",
+                        conflict.get("min_window", 0),
                     )
                     try:
                         answers[i], raw[i] = _consistent_answer(
