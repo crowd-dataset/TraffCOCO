@@ -57979,6 +57979,8 @@
       "semantic_information": {
         "keywords": [
           "flexible post",
+          "post cone",
+          "orange post",
           "tubular marker",
           "wand",
           "lane separator",
@@ -58040,7 +58042,7 @@
         "relative_position_to_road",
         "structural_continuity"
       ],
-      "grounding_prompt": "flexible lane separator post"
+      "grounding_prompt": "flexible post"
     },
     {
       "class_id": "F022",
@@ -69036,6 +69038,352 @@
         "mounting_structure"
       ],
       "grounding_prompt": "rectangular road sign with text"
+    },
+    {
+      "class_id": "F028",
+      "class_name": "billboard",
+      "country": "Global",
+      "traffic_standard": null,
+      "super_category": "road_infrastructure",
+      "parent_category": "road_infrastructure",
+      "description": "Large roadside advertising board or hoarding showing commercial images, brands, products or people",
+      "purpose": "Separate roadside advertising from traffic signs",
+      "visual_attributes": {
+        "typical_shapes": [
+          "large rectangle",
+          "tall vertical board",
+          "wide horizontal hoarding"
+        ],
+        "typical_colors": [
+          "varied",
+          "printed photo",
+          "bright colours"
+        ],
+        "border_color": [
+          "varied"
+        ],
+        "background_color": [
+          "varied"
+        ],
+        "text_color": [
+          "varied"
+        ],
+        "material": [
+          "vinyl",
+          "printed sheet",
+          "metal frame",
+          "LED panel",
+          "painted board"
+        ],
+        "reflective": false,
+        "visual_characteristics": [
+          "Large roadside advertising board or hoarding showing commercial images, brands, products or people"
+        ]
+      },
+      "text_information": {
+        "common_text": [],
+        "languages": [
+          "any"
+        ],
+        "common_symbols": [
+          "advertisement",
+          "brand",
+          "product",
+          "slogan"
+        ]
+      },
+      "installation": {
+        "mounted_on": [
+          "tall frame",
+          "building roof",
+          "building facade",
+          "pole",
+          "gantry"
+        ],
+        "orientation": "vertical",
+        "typical_height": "varies"
+      },
+      "context": {
+        "typical_location": [
+          "road",
+          "roadside",
+          "intersection"
+        ],
+        "road_types": [
+          "urban",
+          "highway",
+          "rural"
+        ],
+        "urban_rural": [
+          "urban",
+          "rural"
+        ],
+        "frequently_nearby_objects": [
+          "traffic_light_3_phase",
+          "guardrail",
+          "traffic_cone",
+          "road",
+          "car",
+          "pedestrian",
+          "traffic_sign",
+          "streetlight",
+          "sidewalk",
+          "road_marking"
+        ]
+      },
+      "relationships": {
+        "parent": "infrastructure",
+        "children": [],
+        "related_classes": [
+          "guide_information_sign"
+        ],
+        "common_confusions": [
+          {
+            "class": "guide_information_sign",
+            "reason_for_confusion": "both are boards carrying text",
+            "distinguishing_feature": "advertising or business content (brands, products, people, shop names) rather than road directions or traffic rules"
+          },
+          {
+            "class": "shop_sign",
+            "reason_for_confusion": "both are commercial boards on buildings",
+            "distinguishing_feature": "a billboard advertises products or brands on a large standalone or rooftop board; a shop sign names the business at its own frontage"
+          }
+        ]
+      },
+      "semantic_information": {
+        "keywords": [
+          "billboard",
+          "advertisement",
+          "advertising hoarding",
+          "ad board",
+          "hoarding"
+        ],
+        "synonyms": [
+          "advertising board",
+          "hoarding",
+          "poster board",
+          "digital billboard"
+        ],
+        "aliases": []
+      },
+      "inference_cues": {
+        "likely_descriptions": [
+          "large billboard with a person and brand text",
+          "advertising hoarding on a building",
+          "tall vertical advertisement",
+          "digital advertising screen at the roadside",
+          "billboard showing a product advert"
+        ]
+      },
+      "example_images": [],
+      "sources": {
+        "from_taxonomy": [
+          "Category F - Road Infrastructure"
+        ],
+        "inferred": [
+          "Added 2026-11-18: roadside adverts and shop signs were labelled as traffic signs"
+        ],
+        "traffic_standard": "Global"
+      },
+      "object_type": "infrastructure",
+      "embedding_text": "The billboard is a large roadside advertising board or hoarding. It shows commercial content such as brand names, products, people and slogans, often as a printed photo, and is mounted high on a tall frame, a pole or a building. It is not a traffic sign: it gives no road directions or traffic rules.",
+      "distinctive_features": [
+        "Commercial advertising content",
+        "Large printed image or screen",
+        "Brand, product or slogan text",
+        "Mounted high on a frame, pole or building"
+      ],
+      "common_confusions": [],
+      "negative_cues": [
+        "Do not use for traffic signs, direction signs or road guidance",
+        "Do not use for business name signs on shops (use shop_sign)"
+      ],
+      "attribute_importance": {
+        "shape": 2,
+        "color": 1,
+        "text": 2,
+        "symbol": 1,
+        "context": 3,
+        "location": 3
+      },
+      "detection_priority": [
+        "board_size",
+        "mounting_structure",
+        "commercial_content",
+        "location"
+      ],
+      "grounding_prompt": "billboard"
+    },
+    {
+      "class_id": "F029",
+      "class_name": "shop_sign",
+      "country": "Global",
+      "traffic_standard": null,
+      "super_category": "road_infrastructure",
+      "parent_category": "road_infrastructure",
+      "description": "Business or shop name sign on a storefront or building, showing a shop name, logo or services",
+      "purpose": "Separate commercial shop signage from traffic signs",
+      "visual_attributes": {
+        "typical_shapes": [
+          "horizontal rectangle",
+          "fascia board",
+          "vertical banner",
+          "lightbox"
+        ],
+        "typical_colors": [
+          "varied",
+          "bright colours"
+        ],
+        "border_color": [
+          "varied"
+        ],
+        "background_color": [
+          "varied"
+        ],
+        "text_color": [
+          "varied"
+        ],
+        "material": [
+          "vinyl",
+          "printed sheet",
+          "metal frame",
+          "LED panel",
+          "painted board"
+        ],
+        "reflective": false,
+        "visual_characteristics": [
+          "Business or shop name sign on a storefront or building, showing a shop name, logo or services"
+        ]
+      },
+      "text_information": {
+        "common_text": [],
+        "languages": [
+          "any"
+        ],
+        "common_symbols": [
+          "shop name",
+          "logo",
+          "store",
+          "business"
+        ]
+      },
+      "installation": {
+        "mounted_on": [
+          "storefront",
+          "building facade",
+          "awning",
+          "pole"
+        ],
+        "orientation": "vertical",
+        "typical_height": "varies"
+      },
+      "context": {
+        "typical_location": [
+          "road",
+          "roadside",
+          "intersection"
+        ],
+        "road_types": [
+          "urban",
+          "highway",
+          "rural"
+        ],
+        "urban_rural": [
+          "urban",
+          "rural"
+        ],
+        "frequently_nearby_objects": [
+          "traffic_light_3_phase",
+          "guardrail",
+          "traffic_cone",
+          "road",
+          "car",
+          "pedestrian",
+          "traffic_sign",
+          "streetlight",
+          "sidewalk",
+          "road_marking"
+        ]
+      },
+      "relationships": {
+        "parent": "infrastructure",
+        "children": [],
+        "related_classes": [
+          "guide_information_sign"
+        ],
+        "common_confusions": [
+          {
+            "class": "guide_information_sign",
+            "reason_for_confusion": "both are boards carrying text",
+            "distinguishing_feature": "advertising or business content (brands, products, people, shop names) rather than road directions or traffic rules"
+          },
+          {
+            "class": "billboard",
+            "reason_for_confusion": "both are commercial boards on buildings",
+            "distinguishing_feature": "a shop sign names the business at its own frontage; a billboard advertises products or brands on a large standalone or rooftop board"
+          }
+        ]
+      },
+      "semantic_information": {
+        "keywords": [
+          "shop sign",
+          "store sign",
+          "business sign",
+          "shop board",
+          "storefront sign"
+        ],
+        "synonyms": [
+          "fascia sign",
+          "store name board",
+          "commercial sign"
+        ],
+        "aliases": []
+      },
+      "inference_cues": {
+        "likely_descriptions": [
+          "shop name board above a storefront",
+          "illuminated store sign",
+          "business sign with logo on a building",
+          "signboard of a restaurant or shop"
+        ]
+      },
+      "example_images": [],
+      "sources": {
+        "from_taxonomy": [
+          "Category F - Road Infrastructure"
+        ],
+        "inferred": [
+          "Added 2026-11-18: roadside adverts and shop signs were labelled as traffic signs"
+        ],
+        "traffic_standard": "Global"
+      },
+      "object_type": "infrastructure",
+      "embedding_text": "The shop sign is a business or store name sign on a storefront or building facade. It shows a shop name, logo, phone number or services, often illuminated or as a fascia board above the entrance. It is not a traffic sign: it gives no road directions or traffic rules.",
+      "distinctive_features": [
+        "Shop or business name",
+        "Logo or services",
+        "On a storefront or building facade"
+      ],
+      "common_confusions": [],
+      "negative_cues": [
+        "Do not use for traffic signs, direction signs or road guidance",
+        "Do not use for large advertising hoardings (use billboard)"
+      ],
+      "attribute_importance": {
+        "shape": 2,
+        "color": 1,
+        "text": 2,
+        "symbol": 1,
+        "context": 3,
+        "location": 3
+      },
+      "detection_priority": [
+        "board_size",
+        "mounting_structure",
+        "commercial_content",
+        "location"
+      ],
+      "grounding_prompt": "shop sign"
     }
   ],
   "upgrade_notes": "Version 2.1: Updated from expanded taxonomy Markdown. Added 167 new classes. Updated descriptions for stop_sign, yield_sign, speed_limit_sign, end_speed_limit_sign, guardrail, streetlight, delineator_post. Added traffic signal aspect classes (D012-D039), new road markings (E018-E031), new infrastructure (F016-F027), and country-specific signs/vehicles (I021-I085). | v2.1 enrichment pass: expanded shapes, normalized colors, expanded materials, enriched synonyms/aliases/keywords, rebuilt inference_cues, rebuilt embedding_text for all 412 classes using VLM-compatible natural language. | v2.2 fact-check audit pass: reviewed all 413 classes against authoritative sources where available; 44 corrections applied (visual, factual, terminology, semantic-scope, and data-integrity fixes); 4 duplicate class pairs flagged for merge (I001/I078, I013/C063, F009/F019, H001/I084); 2 missing-class gaps flagged (no US-style speed-limit-sign class; taxi/london_black_cab overlap); 1 entry flagged for manual review pending a primary source (Cuba stop sign). See accompanying audit report for full detail and per-class evidence/confidence."

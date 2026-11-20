@@ -89,6 +89,15 @@ from annotation_pipeline.pipeline.annotation import AnnotationEngine
 from annotation_pipeline.pipeline.deduplication import (
     deduplicate_detections_by_image,
 )
+from annotation_pipeline.pipeline.conflict_check import (
+    align_rider_labels,
+    run_conflict_check,
+)
+from annotation_pipeline.pipeline.shape_check import (
+    POST_CLASS,
+    check_upright_shapes,
+    remove_mask_duplicates,
+)
 from annotation_pipeline.prompts.load_prompt import load_prompt
 # Random frame downloader
 from annotation_pipeline.pipeline.random_frame_sampler import get_random_frames_from_common_config
@@ -101,6 +110,8 @@ from annotation_pipeline.models.segmentation.surface_segmenter import (
     export_surface_coco,
     load_surface_classes,
     overlay_surfaces,
+    remove_barriers_on_flat_ground,
+    remove_surface_covered_markings,
     surface_mask_path,
 )
 
@@ -3744,6 +3755,97 @@ def _draw_final_detections(
     return rendered
 
 
+def _ontology_entries(config) -> list[dict]:
+    """Return every class entry of the ontology file ([] if unreadable)."""
+
+    try:
+        ontology = json.loads(
+            Path(config.paths.ontology_file).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read ontology file: {}", exc)
+        return []
+
+    entries = []
+    stack = [ontology]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "class_name" in node:
+                entries.append(node)
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return entries
+
+
+def _ontology_class_id(config, class_name: str) -> str | None:
+    """Return the ontology class_id of ``class_name`` (None if absent)."""
+
+    for entry in _ontology_entries(config):
+        if entry.get("class_name") == class_name:
+            return entry.get("class_id")
+    return None
+
+
+def _confusable_classes(entry: dict) -> list[str]:
+    """Classes the ontology lists as commonly confused with ``entry``."""
+
+    confusions = (
+        entry.get("common_confusions")
+        or (entry.get("relationships") or {}).get("common_confusions")
+        or []
+    )
+    return [
+        item["class"]
+        for item in confusions
+        if isinstance(item, dict) and item.get("class")
+    ]
+
+
+def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None:
+    """Run conflict_check.py, then match rider labels to their vehicles."""
+
+    entries = _ontology_entries(config)
+
+    if getattr(config.pipeline, "run_conflict_check", True):
+        _conflict_check(config, image_paths, detections_by_image, entries)
+
+    # A rider's class follows the (checked) vehicle they ride.
+    align_rider_labels(
+        detections_by_image,
+        class_ids={
+            entry["class_name"]: entry.get("class_id") for entry in entries
+        },
+    )
+
+
+def _conflict_check(config, image_paths, detections_by_image, entries) -> None:
+    """Run run_conflict_check; a failure is logged and changes nothing."""
+
+    try:
+        counts = run_conflict_check(
+            config,
+            image_paths,
+            detections_by_image,
+            class_ids={
+                entry["class_name"]: entry.get("class_id")
+                for entry in entries
+            },
+            class_groups={
+                entry["class_name"]: entry.get("super_category") or ""
+                for entry in entries
+            },
+            class_confusions={
+                entry["class_name"]: _confusable_classes(entry)
+                for entry in entries
+            },
+        )
+        logger.info("Conflict check: {}", counts)
+    except Exception as exc:
+        logger.error("Conflict check failed, boxes left unchanged: {}", exc)
+
+
 def _coco_images_for_surfaces(
     coco_path: Path,
     image_paths: list[Path],
@@ -5395,6 +5497,7 @@ def main() -> None:
     # final in-memory detections after annotation, postprocessing, optional
     # semantic verification, and >30 routing decisions. SAM 2 receives the
     # existing bbox as a box prompt and never replaces that bbox.
+    sam_engine = None
     if config.pipeline.run_segmentation and stage_is_at_or_after("sam2"):
         sam_segmentation_stage_start = time.perf_counter()
 
@@ -5445,6 +5548,21 @@ def main() -> None:
             # object; segment and export each object once.
             deduplicate_detections_by_image(final_detections_by_image)
 
+            if getattr(config.pipeline, "run_surface_segmentation", False):
+                remove_surface_covered_markings(
+                    final_detections_by_image,
+                    config.models.surface_segmentation_marking_classes,
+                )
+
+            # Boxes claimed by two labels: the scene VLM decides from a
+            # crop (see conflict_check.py). Already-checked boxes are
+            # skipped, so the second call before export is cheap.
+            _run_conflict_check_safely(
+                config,
+                image_paths,
+                final_detections_by_image,
+            )
+
             sam_input_counts = {
                 image_path.name: len(
                     final_detections_by_image.get(image_path.name, [])
@@ -5479,6 +5597,35 @@ def main() -> None:
                     detections_by_image=final_detections_by_image,
                 )
                 sam_progress.update(1)
+
+            # Cones, posts and bollards: drop boxes whose mask is wider
+            # than tall and relabel "cones" that do not narrow to
+            # flexible posts (see shape_check.py).
+            shape_counts = check_upright_shapes(
+                final_detections_by_image,
+                post_class_id=_ontology_class_id(config, POST_CLASS),
+            )
+            logger.info("Upright shape check: {}", shape_counts)
+
+            # Two same-group boxes whose masks mostly overlap are one
+            # object: keep the larger (see shape_check.py).
+            duplicate_counts = remove_mask_duplicates(
+                final_detections_by_image,
+                class_groups={
+                    entry["class_name"]: entry.get("super_category") or ""
+                    for entry in _ontology_entries(config)
+                },
+            )
+            logger.info("Mask duplicate check: {}", duplicate_counts)
+            for image_path in image_paths:
+                if (
+                    image_path.name in shape_counts["changed"]
+                    or image_path.name in duplicate_counts["changed"]
+                ):
+                    sam_engine.rerender_overlay(
+                        image_path,
+                        final_detections_by_image[image_path.name],
+                    )
 
             # Update the authoritative final result metadata to point to
             # the SAM-segmented visualization.
@@ -5627,6 +5774,21 @@ def main() -> None:
         finally:
             surface_segmenter.unload()
             surface_stage_time = time.perf_counter() - surface_stage_start
+
+        # Guardrails and other upright barriers whose SAM mask lies on
+        # road, sidewalk or curb are grounding errors (a curb boxed as a
+        # guardrail); see remove_barriers_on_flat_ground.
+        barrier_changed = remove_barriers_on_flat_ground(
+            final_detections_by_image,
+            config.paths.outputs,
+        )
+        if barrier_changed and sam_engine is not None:
+            for image_path in image_paths:
+                if image_path.name in barrier_changed:
+                    sam_engine.rerender_overlay(
+                        image_path,
+                        final_detections_by_image[image_path.name],
+                    )
 
     else:
         logger.info(
@@ -6548,6 +6710,21 @@ def main() -> None:
         try:
             # Also covers runs without SAM 2 (idempotent after it).
             deduplicate_detections_by_image(final_detections_by_image)
+
+            if getattr(config.pipeline, "run_surface_segmentation", False):
+                remove_surface_covered_markings(
+                    final_detections_by_image,
+                    config.models.surface_segmentation_marking_classes,
+                )
+
+            # Boxes claimed by two labels: the scene VLM decides from a
+            # crop (see conflict_check.py). Already-checked boxes are
+            # skipped, so the second call before export is cheap.
+            _run_conflict_check_safely(
+                config,
+                image_paths,
+                final_detections_by_image,
+            )
 
             coco_path, yolo_yaml_path = export_final_datasets(
                 config=config,

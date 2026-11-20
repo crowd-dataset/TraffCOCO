@@ -79,6 +79,15 @@ class LocateAnythingParser:
 
             if ref_text is not None:
                 current_ref = self._clean_object_name(ref_text)
+                # A coordinate token inside the name ("traffic<799>",
+                # "<578>") means the model mixed name and box; neither can
+                # be trusted (2026-11-18 global test: all such boxes wrong).
+                if not current_ref or re.search(r"<\s*\d+(?:\.\d+)?\s*>", current_ref):
+                    logger.warning(
+                        "Ignoring Locate Anything ref with coordinate tokens: '{}'.",
+                        current_ref,
+                    )
+                    current_ref = None
                 continue
 
             if box_text is None or current_ref is None:
@@ -241,6 +250,36 @@ class LocateAnythingParser:
                     if matched_scene_object is not None:
                         match_type = "alias"
                         break
+
+            # LocateAnything (sampled at temperature 0.7) sometimes fuses two
+            # prompt names ("car</c>SUV" came back as "carUV"). Match a
+            # name that starts with a whole prompt name to that object.
+            if matched_scene_object is None:
+                prefixes = sorted(
+                    (
+                        key for key in scene_by_name
+                        if len(key) >= 3
+                        and normalized_name.startswith(key)
+                        and len(normalized_name) > len(key)
+                    ),
+                    key=len,
+                    reverse=True,
+                )
+                for key in prefixes:
+                    matched_scene_object = self._choose_unique(scene_by_name[key])
+                    if matched_scene_object is not None:
+                        match_type = "prefix"
+                        break
+                if matched_scene_object is None and prefixes:
+                    # Several scene objects share the name (three "car"
+                    # entries): keep the box unmatched, but under the
+                    # prompt name instead of the fused one.
+                    first = scene_by_name[prefixes[0]][0]
+                    detection["object_name"] = str(
+                        first.get("observed_object")
+                        or first.get("object_name")
+                        or prefixes[0]
+                    )
 
             if matched_scene_object is None:
                 logger.warning(

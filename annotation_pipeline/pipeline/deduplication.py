@@ -190,6 +190,24 @@ def deduplicate_detections(
 
         if alternatives:
             winner["alternative_labels"] = alternatives
+            # Labels this box was merged from; conflict_check.py asks the
+            # scene VLM which one fits.
+            winner["merged_labels"] = alternatives
+
+        # Scene objects whose box was merged into this one still grounded
+        # here; conflict_check.py counts boxes per scene object with them.
+        merged_ids = sorted(
+            {
+                detections[m].get("object_id")
+                for m in members
+                if m != best
+                and detections[m].get("object_id") is not None
+                and detections[m].get("object_id") != winner.get("object_id")
+            }
+            | set(winner.get("merged_object_ids") or [])
+        )
+        if merged_ids:
+            winner["merged_object_ids"] = merged_ids
 
         logger.info(
             "Duplicate detections merged: kept '{}' {} over {}",

@@ -995,6 +995,37 @@ class SAM2SegmentationEngine:
             overlay,
         )
 
+    def rerender_overlay(
+        self,
+        image_path: Path,
+        detections: list[dict[str, Any]],
+    ) -> Path:
+        """
+        Redraw ``<stem>_segmented.png`` from the saved per-box masks.
+
+        Used after a later step removes or relabels boxes, so the overlay
+        that FINAL is drawn on matches the exported detections.
+        """
+
+        masks: list[np.ndarray | None] = []
+        for detection in detections:
+            mask_path = (detection.get("segmentation") or {}).get("mask_path")
+            if mask_path and Path(mask_path).exists():
+                with Image.open(mask_path) as mask_image:
+                    masks.append(np.asarray(mask_image.convert("L")) > 127)
+            else:
+                masks.append(None)
+
+        overlay_path = self.output_dir / f"{image_path.stem}_segmented.png"
+        with Image.open(image_path) as image:
+            rendered = self._render_overlay(
+                image=image.convert("RGB"),
+                masks=masks,
+                detections=detections,
+            )
+        rendered.convert("RGB").save(overlay_path)
+        return overlay_path
+
     @staticmethod
     def _save_binary_mask(
         mask: np.ndarray,
@@ -1182,6 +1213,11 @@ class SAM2SegmentationEngine:
             dict[str, Any]
         ] = []
 
+        # One scene object can ground to several boxes that share its
+        # object_id; give each box its own mask file so a later box does
+        # not overwrite an earlier box's mask.
+        key_counts: dict[str, int] = {}
+
         # --------------------------------------------------------------
         # Segment detections
         # --------------------------------------------------------------
@@ -1201,6 +1237,10 @@ class SAM2SegmentationEngine:
                     index,
                 )
             )
+
+            key_counts[object_key] = key_counts.get(object_key, 0) + 1
+            if key_counts[object_key] > 1:
+                object_key = f"{object_key}_{key_counts[object_key]}"
 
             try:
                 mask, score = (
