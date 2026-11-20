@@ -48,6 +48,8 @@ Responsibilities
 from __future__ import annotations
 
 import gc
+import re
+from collections import Counter
 from custom_logger import CustomLogger
 from pathlib import Path
 from typing import Any
@@ -59,11 +61,78 @@ from PIL import Image
 from transformers import (
     AutoProcessor,
     BitsAndBytesConfig,
+    StoppingCriteria,
+    StoppingCriteriaList,
 )
 
 from annotation_pipeline.models.vlm.base_vlm import BaseVLM
 
 logger = CustomLogger(__name__)
+
+_NAME = re.compile(r'"observed_object"\s*:\s*"([^"]*)"')
+_DESCRIPTION = re.compile(r'"description"\s*:\s*"([^"]*)"')
+
+
+class RepeatedEntryStop(StoppingCriteria):
+    """Stop each answer of a batch once it starts repeating entries.
+
+    A looping scene answer writes the same entry (same name and
+    description) again and again, or the same name with new
+    descriptions, until max_new_tokens; the whole batch then waits for
+    it. In the 2026-11-20 global run, normal answers had at most 5
+    entries with one name and never the same entry twice, while 30 of
+    32 looping answers had 9 or more. The cut-off answer is parsed as
+    usual and gets the scene engine's follow-up question.
+    """
+
+    def __init__(
+        self,
+        tokenizer,
+        input_len: int,
+        same_entry: int = 3,
+        same_name: int = 6,
+        every: int = 16,
+    ) -> None:
+
+        self.tokenizer = tokenizer
+        self.input_len = input_len
+        self.same_entry = same_entry
+        self.same_name = same_name
+        self.every = every
+        self.stopped = 0
+
+    def looping(self, text: str) -> bool:
+        """True when the text repeats an entry or a name too often."""
+
+        names = [n.strip().lower() for n in _NAME.findall(text)]
+        descriptions = [d.strip().lower() for d in _DESCRIPTION.findall(text)]
+
+        if names and Counter(names).most_common(1)[0][1] >= self.same_name:
+            return True
+
+        entries = Counter(zip(names, descriptions))
+
+        return bool(entries) and entries.most_common(1)[0][1] >= self.same_entry
+
+    def __call__(self, input_ids, scores, **kwargs):
+
+        generated = input_ids[:, self.input_len:]
+        done = torch.zeros(
+            input_ids.shape[0], dtype=torch.bool, device=input_ids.device,
+        )
+
+        if generated.shape[1] == 0 or generated.shape[1] % self.every:
+            return done
+
+        texts = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
+
+        for i, text in enumerate(texts):
+            if self.looping(text):
+                done[i] = True
+
+        self.stopped = max(self.stopped, int(done.sum()))
+
+        return done
 
 
 class HFVLM(BaseVLM):
@@ -97,6 +166,9 @@ class HFVLM(BaseVLM):
 
     # None keeps the model's own generation config.
     DEFAULT_REPETITION_PENALTY = None
+
+    # Stop an answer early once it repeats entries (RepeatedEntryStop).
+    DEFAULT_STOP_ON_LOOP = False
 
     # -------------------------------------------------------------------------
     # Initialization
@@ -142,6 +214,8 @@ class HFVLM(BaseVLM):
         self.do_sample = self.DEFAULT_DO_SAMPLE
 
         self.repetition_penalty = self.DEFAULT_REPETITION_PENALTY
+
+        self.stop_on_loop = self.DEFAULT_STOP_ON_LOOP
 
         # ----------------------------------------------------------
         # Benchmark statistics
@@ -488,6 +562,13 @@ class HFVLM(BaseVLM):
         if self.repetition_penalty is not None:
             generate_kwargs["repetition_penalty"] = self.repetition_penalty
 
+        input_len = inputs["input_ids"].shape[1]
+
+        if self.stop_on_loop:
+            generate_kwargs["stopping_criteria"] = StoppingCriteriaList([
+                RepeatedEntryStop(self.processor.tokenizer, input_len),
+            ])
+
         with torch.no_grad():
 
             outputs = self.model.generate(
@@ -500,8 +581,6 @@ class HFVLM(BaseVLM):
             )
 
         generation_time = time.perf_counter() - start
-
-        input_len = inputs["input_ids"].shape[1]
 
         generated = outputs[:, input_len:]
 

@@ -48,6 +48,10 @@ class QwenVL(HFVLM):
     # object until max_new_tokens (Spark test, 2026-11-17).
     DEFAULT_REPETITION_PENALTY = 1.05
 
+    # The penalty alone still let 32 of 100 answers loop to
+    # max_new_tokens (Spark global run, 2026-11-20).
+    DEFAULT_STOP_ON_LOOP = True
+
     def __init__(
         self,
         model_id: str,
