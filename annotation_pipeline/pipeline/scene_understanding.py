@@ -70,6 +70,45 @@ Return at most {max_objects} entries as a JSON array, nothing else:
 """
 
 
+# The scene answer names the salient objects, so the rest of a common
+# class are never grounded: in the 2026-11-20 global run (3rd) 137
+# visible objects were missed, 39 vehicles, 38 streetlights, 30 signs
+# and 10 traffic lights among them. Every frame therefore also gets one
+# generic entry per such class; Locate Anything returns every instance of
+# it, deduplication merges the boxes already found, and the conflict
+# check verifies the new ones like any other box.
+SWEEP_OBJECTS = (
+    ("car", "vehicle", "car, parked, oncoming or ahead"),
+    ("streetlight", "road_infrastructure", "street lamp on a pole"),
+    ("traffic light", "traffic_signal", "three-lamp traffic signal for vehicles"),
+    ("traffic sign", "traffic_sign", "traffic sign on a post or gantry"),
+)
+
+
+def sweep_objects(objects: list[dict]) -> list[dict]:
+    """One generic entry per ``SWEEP_OBJECTS`` class, numbered after
+    ``objects``."""
+
+    next_id = 1 + max(
+        (obj["object_id"] for obj in objects
+         if isinstance(obj.get("object_id"), int)),
+        default=0,
+    )
+    return [
+        {
+            "object_id": next_id + offset,
+            "observed_object": name,
+            "object_group": group,
+            "description": description,
+            "confidence": 0.5,
+            "scene_confidence": 0.5,
+            "visual_attributes": {},
+            "sweep": True,
+        }
+        for offset, (name, group, description) in enumerate(SWEEP_OBJECTS)
+    ]
+
+
 def _entry_key(obj: dict) -> tuple[str, str]:
     """Name and description of an entry, used to spot repeats."""
 
@@ -333,6 +372,8 @@ class SceneUnderstandingEngine:
                 )
 
                 objects = objects[:max_objects]
+
+            objects = objects + sweep_objects(objects)
 
             parsed_file = parsed_dir / f"{image_path.stem}.json"
 

@@ -49,9 +49,12 @@ whose own label Qwen picks in neither option order, answering "none of
 these" at least once, is dropped (a sign box on
 foliage, a "zebra crossing" on a canal edge, a "construction ahead sign"
 on an excavator, a "streetlight" on empty sky in the 2026-11-18 check).
-Traffic lights are not verified: small night lights are often right but
-hard to judge from a crop. Cones, posts and bollards are not verified
-either: shape_check.py settles them from their SAM masks.
+Every vehicle traffic-light box is asked which lamp is lit, or whether
+it is a pedestrian signal or no traffic light at all, in both option
+orders (see ``LIGHT_OPTIONS``). Every sign box that is kept is then
+described by the VLM, and the sign classes nearest that description are
+offered as its type (see ``check_sign_types``). Cones, posts and bollards
+are not verified: shape_check.py settles them from their SAM masks.
 
 Options are always ontology class names; a grounding label that is not a
 class (a garbled token such as ``sh<561>``) is never offered.
@@ -72,6 +75,19 @@ An answer that would change a box is asked a second time with the
 options in reverse order and only used when both answers agree, because
 small VLMs favour options by position.
 
+A box from the street-scene detectors (see detector_fusion.py) keeps its
+detector group: the VLM may give it a finer class of the same group (a
+"car" box may become a taxi, a traffic light may get its state or turn out
+to be a pedestrian signal), but an
+answer of another group (a crosswalk called a stop line, a person called a
+car) leaves the box unchanged, and a "not seen" answer does not drop it
+when the detector was at least ``DETECTOR_KEEP_CONFIDENCE`` sure. On 160
+held-out Mapillary Vistas images (2026-11-23) the check had dropped or
+moved many real detector boxes (sign recall fell from 56% to 40%, crosswalks
+from 56% to 26%); with this rule F1 rose from 0.510 to 0.541 (precision
+70.6% -> 69.8%, recall 39.9% -> 44.2%), and from 0.501 to 0.533 on the 40
+dev images. Restoring boxes dropped as duplicates did not help.
+
 Each decision is stored in ``detection["conflict_check"]`` and boxes that
 have one are not asked again. Crops are written to
 ``outputs/conflict_check/crops`` for review.
@@ -87,12 +103,16 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from annotation_pipeline.pipeline.detector_fusion import fusion_group
 from annotation_pipeline.pipeline.shape_check import UPRIGHT_CLASSES
 from custom_logger import CustomLogger
 
 logger = CustomLogger(__name__)
 
 CONFLICT_IOU = 0.5
+# A detector box at least this confident is not dropped on a "not seen"
+# answer (0.5 and 0.7 gave the same held-out F1; 0.7 kept more precision).
+DETECTOR_KEEP_CONFIDENCE = 0.7
 CONFLICT_CONTAINMENT = 0.9
 
 # Ontology super-categories checked for extra boxes of one scene object.
@@ -166,13 +186,33 @@ LIGHT_STATE_CLASSES = (
     "traffic_light_green",
 )
 LIGHT_NO_STATE = "traffic_light_3_phase"
-LIGHT_CLASSES = frozenset(LIGHT_STATE_CLASSES + (LIGHT_NO_STATE, "traffic_light_off"))
+# In the 2026-11-20 global run (3rd) 22 of 79 light boxes were wrong: a
+# pedestrian signal (orange hand) called a vehicle light, the back or side
+# of a head given a state or an arrow, and shop lights, barrels and
+# building fronts called lights. The state question had no answer for
+# these, and the box's own label, offered first, was taken after one
+# question. So the options now come in a fixed order (not the box's own
+# label first), add a pedestrian signal and "not a traffic light", and
+# every light box is asked in both orders.
+PEDESTRIAN_SIGNAL = "pedestrian_signal"
+NOT_A_LIGHT = "not_a_traffic_light"
+LIGHT_OPTIONS = LIGHT_STATE_CLASSES + (LIGHT_NO_STATE, PEDESTRIAN_SIGNAL, NOT_A_LIGHT)
+LIGHT_CLASSES = frozenset(LIGHT_STATE_CLASSES + (
+    LIGHT_NO_STATE,
+    "traffic_light_off",
+    "traffic_light_2_phase",
+    "traffic_light_arrow_left",
+    "traffic_light_arrow_right",
+    "traffic_light_arrow_straight",
+))
 LIGHT_QUESTION_TEXT = {
     "traffic_light_red": "traffic light with the RED lamp lit",
     "traffic_light_yellow": "traffic light with the YELLOW (amber) lamp lit",
     "traffic_light_green": "traffic light with the GREEN lamp lit",
     LIGHT_NO_STATE: "traffic light with no lit lamp visible (seen from the back or side, or dark)",
     "traffic_light_off": "traffic light with no lit lamp visible (seen from the back or side, or dark)",
+    PEDESTRIAN_SIGNAL: "pedestrian signal (lit walking figure or hand)",
+    NOT_A_LIGHT: "not a traffic light (a street lamp, sign, shop light, vehicle or building)",
 }
 
 # Every vehicle and road-user box is checked against common classes of
@@ -207,7 +247,9 @@ OPTION_TEXT.update({
 
 NONE_OPTION = "none of these"
 # Verify answers that reject the box.
-DROP_ANSWERS = frozenset({NONE_OPTION, NOT_A_SIGN, NOT_A_MOVER, SEVERAL_OBJECTS, NOT_A_LAMP})
+DROP_ANSWERS = frozenset({
+    NONE_OPTION, NOT_A_SIGN, NOT_A_MOVER, SEVERAL_OBJECTS, NOT_A_LAMP, NOT_A_LIGHT,
+})
 # Vehicle and road-user questions; their boxes are asked in both orders.
 MOVER_KINDS = frozenset({"extra_box", "mover_verify"})
 COMMON_MOVERS = frozenset(c for options in MOVER_OPTIONS.values() for c in options)
@@ -409,12 +451,11 @@ def find_conflicts(
             or labels[i] not in LIGHT_CLASSES
         ):
             continue
-        own = LIGHT_NO_STATE if labels[i] == "traffic_light_off" else labels[i]
         conflicts[i] = {
             "kind": "light_state",
             "candidates": [labels[i]] + [
-                c for c in LIGHT_STATE_CLASSES + (LIGHT_NO_STATE,)
-                if c != own and known(c)
+                c for c in LIGHT_OPTIONS
+                if c != labels[i] and (known(c) or c == NOT_A_LIGHT)
             ],
             "partners": {},
         }
@@ -614,6 +655,9 @@ def _consistent_answer(
     the box's own label (the first candidate) costs one question.
     """
 
+    if kind == "light_state":
+        return _light_answer(model, crop_path, candidates)
+
     options = candidates + list(extra or []) + [NONE_OPTION]
     first = _ask(model, crop_path, options, kind)
     if first is None or (first == candidates[0] and kind not in MOVER_KINDS):
@@ -647,24 +691,270 @@ def _consistent_answer(
     return None, [first, second]
 
 
+VEHICLE_LIGHTS = frozenset(LIGHT_STATE_CLASSES + (LIGHT_NO_STATE,))
+
+# Sign type. The checks above only offer a sign box its own label, the
+# classes the ontology lists as confusable with it and the general sign
+# class, so a sign named with the wrong type keeps it (a keep-right sign
+# as "roundabout sign", a yield sign as "traffic signal ahead sign") and
+# readable speed-limit, stop and priority signs stay "unreadable" (11 of
+# 30 wrong sign boxes in the 2026-11-20 global run, 3rd). Each kept sign
+# box is now described by the scene VLM in its own words, the sign
+# classes nearest that description are found by embedding, and the VLM
+# picks among the box's label and those classes in both option orders;
+# the box is relabelled only when both orders pick the same other class.
+SIGN_DESCRIBE_PROMPT = (
+    "This is part of a dashcam street scene. The red rectangle marks a "
+    "traffic sign. Describe that sign in one sentence: its shape, its "
+    "colours, and the symbol, number or words on it."
+)
+SIGN_DESCRIBE_TOKENS = 48
+SIGN_TYPE_CANDIDATES = 4
+
+
+def _sign_option_text(option: str, hints: dict[str, str]) -> str:
+
+    text = _option_text(option)
+    hint = hints.get(option)
+    return f"{text} ({hint})" if hint else text
+
+
+def _ask_sign_type(
+    model: Any,
+    crop_path: Path,
+    options: list[str],
+    hints: dict[str, str],
+) -> str | None:
+
+    lines = [
+        f"{letter}) {_sign_option_text(option, hints)}"
+        for letter, option in zip(string.ascii_uppercase, options)
+    ]
+    result = model.infer(
+        image_paths=[crop_path],
+        prompt=PROMPT.format(options="\n".join(lines)),
+    )
+    return parse_answer(_response_text(result), options)
+
+
+def nearest_sign_classes(
+    embedder: Any,
+    description: str,
+    names: list[str],
+    vectors: Any,
+    exclude: set[str],
+    k: int = SIGN_TYPE_CANDIDATES,
+) -> list[str]:
+    """The ``k`` sign classes whose ontology text is nearest
+    ``description`` (vectors are normalised, so a dot product ranks)."""
+
+    query = embedder.encode(description)
+    scores = vectors @ query
+    ranked = [names[j] for j in scores.argsort()[::-1]]
+    return [name for name in ranked if name not in exclude][:k]
+
+
+def _sign_type_answer(
+    model: Any,
+    crop_path: Path,
+    own: str,
+    nearest: list[str],
+    hints: dict[str, str],
+) -> tuple[str | None, list[str | None]]:
+    """Own label, the nearest classes and the general class, asked in
+    both orders; a change needs the same answer from both."""
+
+    options = [own] + [c for c in nearest if c != own]
+    if own != GENERAL_SIGN:
+        options.append(GENERAL_SIGN)
+    first = _ask_sign_type(model, crop_path, options, hints)
+    second = _ask_sign_type(model, crop_path, list(reversed(options)), hints)
+    if first == second and first not in (None, own):
+        return first, [first, second]
+    return None, [first, second]
+
+
+def _sign_index(
+    config: Any,
+    sign_classes: dict[str, dict[str, str]],
+) -> tuple[Any, list[str], Any]:
+    """Embedding model, sign class names and their normalised vectors."""
+
+    from annotation_pipeline.models.ontology.embedding_model import EmbeddingModel
+
+    embedder = EmbeddingModel(
+        model_name=config.models.embedding_model_id,
+        device=config.models.embedding_device,
+        normalize_embeddings=True,
+    )
+    names = list(sign_classes)
+    vectors = embedder.encode_batch([sign_classes[n].get("text", n) for n in names])
+    return embedder, names, vectors
+
+
+def check_sign_types(
+    model: Any,
+    embedder: Any,
+    image: Image.Image,
+    image_stem: str,
+    detections: list[dict[str, Any]],
+    class_groups: dict[str, str],
+    sign_classes: dict[str, dict[str, str]],
+    class_ids: dict[str, str],
+    out_dir: Path,
+    vectors: Any,
+) -> int:
+    """Ask the type of every sign box; relabel in place. Returns the
+    number of boxes relabelled."""
+
+    names = list(sign_classes)
+    hints = {
+        name: entry.get("hint", "")
+        for name, entry in sign_classes.items()
+    }
+    changed = 0
+
+    for i, detection in enumerate(detections):
+        own = _label(detection)
+        box = _box(detection)
+        if (
+            box is None
+            or "sign_type" in detection
+            or class_groups.get(own) != SIGN_GROUP
+            or own not in sign_classes
+        ):
+            continue
+
+        crop_path = make_crop(
+            image,
+            box,
+            out_dir / "crops" / f"{image_stem}_sign{i}.png",
+            SIGN_MIN_WINDOW,
+        )
+        model.max_new_tokens = SIGN_DESCRIBE_TOKENS
+        try:
+            description = _response_text(
+                model.infer(image_paths=[crop_path], prompt=SIGN_DESCRIBE_PROMPT)
+            ).strip()
+        finally:
+            model.max_new_tokens = ANSWER_TOKENS
+        if not description:
+            continue
+
+        nearest = nearest_sign_classes(
+            embedder, description, names, vectors, {own, GENERAL_SIGN},
+        )
+        answer, replies = _sign_type_answer(model, crop_path, own, nearest, hints)
+        detection["sign_type"] = {
+            "label_before": own,
+            "description": description,
+            "candidates": nearest,
+            "replies": replies,
+            "answer": answer,
+        }
+        if answer:
+            alternatives = [
+                a for a in (detection.get("alternative_labels") or [])
+                if a != answer
+            ]
+            if own not in alternatives:
+                alternatives.append(own)
+            detection["alternative_labels"] = alternatives
+            detection["class_name"] = answer
+            detection["final_label"] = answer.replace("_", " ")
+            if class_ids.get(answer):
+                detection["class_id"] = class_ids[answer]
+            changed += 1
+        logger.info(
+            "Sign type | {} box {} | '{}' | options {} | replies {} -> {}",
+            own,
+            [round(v) for v in box],
+            description,
+            nearest,
+            replies,
+            answer or "unchanged",
+        )
+
+    return changed
+
+
+def _light_answer(
+    model: Any,
+    crop_path: Path,
+    candidates: list[str],
+) -> tuple[str | None, list[str | None]]:
+    """Ask a traffic-light box in both orders of the fixed option list.
+
+    Both orders agree: that answer. Otherwise the box's own label picked
+    in one order keeps it; two different vehicle-light answers mean the
+    state cannot be told, so the box gets the stateless class.
+    """
+
+    own = candidates[0]
+    order = [c for c in LIGHT_OPTIONS if c in candidates]
+    order += [c for c in candidates if c not in order]
+    first = _ask(model, crop_path, order, "light_state")
+    second = _ask(model, crop_path, list(reversed(order)), "light_state")
+    replies = [first, second]
+    if own == "traffic_light_off":
+        # The stateless answer confirms a light that is off.
+        replies_seen = [own if r == LIGHT_NO_STATE else r for r in replies]
+    else:
+        replies_seen = replies
+    a, b = replies_seen
+    if a is None or b is None:
+        return None, replies
+    if a == b:
+        return a, replies
+    if own in (a, b):
+        return own, replies
+    if {a, b} <= VEHICLE_LIGHTS:
+        return LIGHT_NO_STATE, replies
+    return None, replies
+
+
 def decide(
     detections: list[dict[str, Any]],
     conflicts: dict[int, dict[str, Any]],
     answers: dict[int, str | None],
     class_ids: dict[str, str],
+    class_groups: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply the VLM answers; return the detections that are kept."""
 
     labels = [_label(d) for d in detections]
     boxes = [_box(d) for d in detections]
     drop: set[int] = set()
+    class_groups = class_groups or {}
+
+    def leaves_detector_group(i: int, answer: str | None) -> bool:
+        """True when an answer would move a detector box to another group."""
+
+        if not detections[i].get("detector") or not answer or answer in DROP_ANSWERS:
+            return False
+        if class_groups.get(answer) == class_groups.get(labels[i]) == "traffic_signal":
+            return False  # a detector "traffic light" may be a pedestrian signal
+        return fusion_group(answer, class_groups.get(answer)) != fusion_group(
+            labels[i], class_groups.get(labels[i])
+        )
+
+    def detector_sure(i: int) -> bool:
+
+        try:
+            confidence = float(detections[i].get("detector_confidence") or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(detections[i].get("detector")) and confidence >= DETECTOR_KEEP_CONFIDENCE
 
     # Labels after this round's answers, for the neighbour test: a box
     # relabelled in the same round (an "auto-rickshaw" box that is really
     # the motorcycle in front of an SUV) counts with its new label.
     settled = list(labels)
     for j, answer in answers.items():
-        if answer and answer not in DROP_ANSWERS and j in conflicts:
+        if (
+            answer and answer not in DROP_ANSWERS and j in conflicts
+            and not leaves_detector_group(j, answer)
+        ):
             settled[j] = answer
 
     for i, conflict in conflicts.items():
@@ -674,7 +964,13 @@ def decide(
 
         if answer == own:
             action = "confirmed"
-        elif answer in DROP_ANSWERS and conflict.get("kind") in VERIFY_KINDS:
+        elif (
+            answer in DROP_ANSWERS
+            and conflict.get("kind") in VERIFY_KINDS | {"light_state"}
+            and detector_sure(i)
+        ):
+            action = "kept_detector_box"
+        elif answer in DROP_ANSWERS and conflict.get("kind") in VERIFY_KINDS | {"light_state"}:
             action = "dropped_not_seen"
             drop.add(i)
         elif answer and answer in conflict["partners"]:
@@ -687,6 +983,8 @@ def decide(
             if confirmed:
                 action = "dropped_duplicate"
                 drop.add(i)
+        elif leaves_detector_group(i, answer):
+            action = "kept_detector_group"
         elif answer and answer not in DROP_ANSWERS and any(
             j != i
             and settled[j] == answer
@@ -738,8 +1036,14 @@ def run_conflict_check(
     class_ids: dict[str, str],
     class_groups: dict[str, str] | None = None,
     class_confusions: dict[str, list[str]] | None = None,
+    sign_classes: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, int]:
-    """Check every conflict box with the scene VLM; change detections in place."""
+    """Check every conflict box with the scene VLM; change detections in place.
+
+    ``sign_classes`` maps each traffic-sign class to its ontology
+    ``text`` (for the embedding search) and a short visual ``hint``; when
+    given, every kept sign box is also asked its type.
+    """
 
     targets = {
         image_path: find_conflicts(
@@ -760,6 +1064,11 @@ def run_conflict_check(
     from annotation_pipeline.models.vlm.model_loader import create_scene_model
 
     out_dir = Path(config.paths.outputs) / "conflict_check"
+    counts["sign_type_changed"] = 0
+    embedder = None
+    sign_names: list[str] = []
+    sign_vectors = None
+    class_groups = class_groups or {}
     model = create_scene_model(config)
     logger.info("Conflict check: {} box(es) in {} image(s).", total, len(targets))
 
@@ -796,12 +1105,40 @@ def run_conflict_check(
                         )
                         answers[i] = None
 
-            kept = decide(detections, conflicts, answers, class_ids)
+            kept = decide(detections, conflicts, answers, class_ids, class_groups)
             for i, replies in raw.items():
                 detections[i]["conflict_check"]["replies"] = replies
             counts["checked"] += len(conflicts)
             counts["dropped"] += len(detections) - len(kept)
             detections_by_image[image_path.name] = kept
+
+            if sign_classes and any(
+                class_groups.get(_label(d)) == SIGN_GROUP for d in kept
+            ):
+                if embedder is None:
+                    embedder, sign_names, sign_vectors = _sign_index(
+                        config, sign_classes,
+                    )
+                try:
+                    with Image.open(image_path) as image:
+                        counts["sign_type_changed"] += check_sign_types(
+                            model,
+                            embedder,
+                            image,
+                            image_path.stem,
+                            kept,
+                            class_groups,
+                            {n: sign_classes[n] for n in sign_names},
+                            class_ids,
+                            out_dir,
+                            sign_vectors,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Sign type check failed in '{}': {}",
+                        image_path.name,
+                        exc,
+                    )
 
             (out_dir / f"{image_path.stem}.json").write_text(
                 json.dumps(

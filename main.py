@@ -105,6 +105,11 @@ from annotation_pipeline.models.segmentation.sam2_segmenter import (
     SAM2SegmentationEngine,
 )
 from annotation_pipeline.models.yolopv2 import YOLOPv2SegmentationEngine
+from annotation_pipeline.models.detection.detector_proposals import (
+    DetectorProposalEngine,
+    proposal_output_dir,
+)
+from annotation_pipeline.pipeline.detector_fusion import fuse_proposals
 from annotation_pipeline.models.segmentation.surface_segmenter import (
     SurfaceSegmenter,
     export_surface_coco,
@@ -1995,9 +2000,12 @@ def get_missing_grounding_classes(
             scene_object,
         )
 
+        # A sweep entry (see scene_understanding.SWEEP_OBJECTS) may well
+        # have nothing to find in the frame; that is no reason to retry.
         if (
             class_name
             and class_name not in processed_classes
+            and not scene_object.get("sweep")
         ):
             missing_by_class.setdefault(
                 class_name,
@@ -3803,6 +3811,15 @@ def _confusable_classes(entry: dict) -> list[str]:
     ]
 
 
+def _sign_hint(entry: dict) -> str:
+    """A short look of a sign class for the sign-type question, such as
+    'blue circle with white arrow pointing right'."""
+
+    visual = entry.get("visual_attributes") or {}
+    looks = visual.get("visual_characteristics") if isinstance(visual, dict) else None
+    return looks[0] if isinstance(looks, list) and looks and isinstance(looks[0], str) else ""
+
+
 def _run_conflict_check_safely(config, image_paths, detections_by_image) -> None:
     """Run conflict_check.py, then match rider labels to their vehicles."""
 
@@ -3839,6 +3856,14 @@ def _conflict_check(config, image_paths, detections_by_image, entries) -> None:
             class_confusions={
                 entry["class_name"]: _confusable_classes(entry)
                 for entry in entries
+            },
+            sign_classes={
+                entry["class_name"]: {
+                    "text": entry.get("embedding_text") or entry.get("description") or "",
+                    "hint": _sign_hint(entry),
+                }
+                for entry in entries
+                if entry.get("super_category") == "traffic_sign"
             },
         )
         logger.info("Conflict check: {}", counts)
@@ -5490,6 +5515,80 @@ def main() -> None:
             )
 
     # ==============================================================
+    # DETECTOR PROPOSALS
+    # ==============================================================
+
+    # YOLO11x and a Mapillary Vistas panoptic model box cars, people,
+    # lights, signs, trucks, buses, billboards and crossings far more
+    # completely than LocateAnything (see detector_proposals.py and
+    # detector_fusion.py). Their boxes join the annotation results here,
+    # before de-duplication and the conflict check, so the scene VLM still
+    # checks every box. Only runs on top of this run's annotation results.
+    if (
+        getattr(config.pipeline, "run_detector_proposals", False)
+        and config.pipeline.run_annotation
+        and stage_is_at_or_after("annotation")
+        and any(final_detections_by_image.values())
+    ):
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("DETECTOR PROPOSALS")
+        logger.info("=" * 80)
+
+        proposal_settings = dict(getattr(config.models, "detector_proposals", None) or {})
+        proposal_engine = None
+
+        try:
+            proposal_engine = DetectorProposalEngine(
+                output_dir=proposal_output_dir(config.paths.outputs),
+                yolo_weights=proposal_settings.get("yolo_weights") or "yolo11x.pt",
+                yolo_image_size=proposal_settings.get("yolo_image_size") or 1920,
+                yolo_classes=proposal_settings.get("yolo_classes"),
+                panoptic_model_id=(
+                    proposal_settings.get("panoptic_model_id")
+                    or "facebook/mask2former-swin-large-mapillary-vistas-panoptic"
+                ),
+                panoptic_max_side=proposal_settings.get("panoptic_max_side") or 1920,
+                panoptic_classes=proposal_settings.get("panoptic_classes"),
+            )
+            proposals_by_image = proposal_engine.process_images(image_paths)
+
+            entries = _ontology_entries(config)
+            class_groups = {
+                entry["class_name"]: entry.get("super_category") or ""
+                for entry in entries
+            }
+            class_ids = {
+                entry["class_name"]: entry.get("class_id") for entry in entries
+            }
+            totals: dict[str, int] = {}
+
+            for image_path in image_paths:
+                fused, counts = fuse_proposals(
+                    final_detections_by_image.get(image_path.name, []),
+                    proposals_by_image.get(image_path.name, []),
+                    class_groups=class_groups,
+                    class_ids=class_ids,
+                    mode=proposal_settings.get("mode") or "replace",
+                    image_name=image_path.name,
+                )
+                final_detections_by_image[image_path.name] = fused
+                for key, value in counts.items():
+                    totals[key] = totals.get(key, 0) + value
+
+            logger.info("Detector proposal fusion: {}", totals)
+
+        except Exception as exc:
+            logger.error("Detector proposal stage failed: {}", exc)
+            failed_images.extend(
+                (image_path.name, "detector_proposals", str(exc))
+                for image_path in image_paths
+            )
+
+        finally:
+            cleanup_stage_resources(proposal_engine)
+
+    # ==============================================================
     # FINAL SAM 2 SEGMENTATION
     # ==============================================================
 
@@ -6261,6 +6360,7 @@ def main() -> None:
                 for key in (
                     "scene_confidence",
                     "yolopv2_confidence",
+                    "detector_confidence",
                     "ontology_score",
                     "grounding_confidence",
                 ):

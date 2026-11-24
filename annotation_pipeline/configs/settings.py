@@ -183,6 +183,11 @@ class ModelsConfig:
     # boxes; empty means the built-in default list.
     surface_segmentation_marking_classes: tuple = ()
 
+    # Detector proposals (YOLO11x + Vistas panoptic Mask2Former): the
+    # "detector_proposals" config block; empty values mean the defaults
+    # in models/detection/detector_proposals.py.
+    detector_proposals: Any = None
+
 # ============================================================================
 # Logging
 # ============================================================================
@@ -282,6 +287,7 @@ class PipelineParams:
 
     run_surface_segmentation: bool = False
     run_conflict_check: bool = True
+    run_detector_proposals: bool = False
 
 # ============================================================================
 # Pipeline Configuration
@@ -532,6 +538,7 @@ def load_config(
         surface_segmentation_marking_classes=tuple(
             raw.get("surface_segmentation", {}).get("marking_classes", [])
         ),
+        detector_proposals=dict(raw.get("detector_proposals", {})),
     )
 
     # ----------------------------------------------------------------------
@@ -572,6 +579,9 @@ def load_config(
 
         run_surface_segmentation=raw.get("run_surface_segmentation", False),
         run_conflict_check=raw.get("run_conflict_check", True),
+        run_detector_proposals=bool(
+            raw.get("detector_proposals", {}).get("enabled", False)
+        ),
     )
 
     # ----------------------------------------------------------------------
