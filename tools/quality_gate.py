@@ -23,7 +23,7 @@ The table also records the cross-validated precision and recall it reached.
 Usage:
   uv run python -m tools.quality_gate \
       --instances outputs/COCO_FORMAT/annotations/instances_final.json \
-      --target 0.92 --min-side 24
+      --target 0.92 --min-side 0
 """
 
 from __future__ import annotations
@@ -77,7 +77,12 @@ def main() -> None:
     parser.add_argument("--table", type=Path, default=DEFAULT_TABLE)
     parser.add_argument("--ontology", type=Path, default=DEFAULT_ONTOLOGY)
     parser.add_argument("--target", default="0.92", help="target precision, a key of the table")
-    parser.add_argument("--min-side", default="24", help="minimum box side in pixels, a key of the table")
+    parser.add_argument(
+        "--min-side",
+        default="0",
+        help="minimum box side in pixels, a key of the table (0, 16, 24 or 32). CROWD frames "
+        "are smaller than Vistas images, so 0 kept far more real objects there at the same precision",
+    )
     args = parser.parse_args()
 
     fits = json.loads(args.table.read_text())["fits"]
