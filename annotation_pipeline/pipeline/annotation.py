@@ -504,7 +504,7 @@ class AnnotationEngine:
                     logger.info(
                         "Removing duplicate unreadable "
                         "traffic-sign detection because "
-                        "specific class '{}' overlaps it "
+                        "specific class '%s' overlaps it "
                         "(IoU=%.2f).",
                         other_class,
                         iou,
@@ -1017,41 +1017,23 @@ class AnnotationEngine:
             # --------------------------------------------------------
             # Could not associate with ontology object.
             #
-            # Preserve bbox instead of silently deleting it.
+            # Such a box has no ontology class, so the export would
+            # name it after the raw grounding text. Locate Anything
+            # sometimes fuses two prompt names ('streetestrian',
+            # 'postb', 'crossinging'), and the 2026-11-21 global test
+            # exported 9 boxes under such names, so the box is dropped.
             # --------------------------------------------------------
 
             if scene_object is None:
 
                 logger.warning(
                     "Could not associate Locate Anything detection "
-                    "with an ontology scene object; preserving bbox: "
-                    "object_name={} object_id={} bbox={}",
+                    "with an ontology scene object; dropping bbox: "
+                    "object_name=%s object_id=%s bbox=%s",
                     grounding.get("object_name")
                     or grounding.get("ref"),
                     grounding_object_id,
                     bbox,
-                )
-
-                final_detections.append(
-                    {
-                        "object_id": grounding_object_id,
-                        "bbox": bbox,
-                        "final_label": None,
-                        "class_name": None,
-                        "class_id": None,
-                        "grounding_prompt": (
-                            grounding.get("grounding_prompt")
-                        ),
-                        "grounding_label": (
-                            grounding.get("object_name")
-                            or grounding.get("ref")
-                        ),
-                        "scene_confidence": None,
-                        "ontology_score": None,
-                        "grounding_confidence": grounding.get(
-                            "grounding_confidence"
-                        ),
-                    }
                 )
 
                 continue

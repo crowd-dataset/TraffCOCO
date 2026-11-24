@@ -73,6 +73,208 @@ DEFAULT_SURFACE_CLASSES: tuple[str, ...] = (
     "Water",
 )
 
+# Ontology road-marking classes that are lines or painted areas with no
+# clear object boundary. Grounding boxes for them were mostly fragments
+# of a line, one box over a whole hatched area, or a railing (pilot check,
+# 2026-11-18: 13 of 16 marking boxes wrong), while the surface masks label
+# the same paint correctly ("Lane Marking - General"). When surface
+# segmentation runs, these boxes are dropped and the paint is taken from
+# the surface masks. Compact painted symbols (arrows, crossings, stop and
+# give-way lines, bicycle/bus/diamond symbols) stay object annotations.
+DEFAULT_SURFACE_MARKING_CLASSES: tuple[str, ...] = (
+    "lane_divider_broken",
+    "lane_divider_solid",
+    "no_passing_marking",
+    "chevron_marking",
+    "hatched_marking",
+    "diagonal_stripes",
+    "parking_bay_marking",
+    "no_parking_zone_marking",
+    "rumble_strip_marking",
+)
+
+
+def _class_key(name: Any) -> str:
+
+    return str(name or "").strip().lower().replace(" ", "_")
+
+
+def remove_surface_covered_markings(
+    detections_by_image: dict[str, list[dict[str, Any]]],
+    classes: tuple[str, ...] | list[str] = (),
+) -> int:
+    """Drop line/area marking boxes that the surface masks cover.
+
+    Changes ``detections_by_image`` in place and returns how many boxes
+    were removed. ``classes`` defaults to DEFAULT_SURFACE_MARKING_CLASSES.
+    """
+
+    drop = {_class_key(c) for c in (classes or DEFAULT_SURFACE_MARKING_CLASSES)}
+    total = 0
+
+    for image_name, detections in list(detections_by_image.items()):
+        if not isinstance(detections, list):
+            continue
+
+        kept = [
+            detection
+            for detection in detections
+            if not (
+                isinstance(detection, dict)
+                and _class_key(
+                    detection.get("class_name") or detection.get("final_label")
+                ) in drop
+            )
+        ]
+        removed = len(detections) - len(kept)
+
+        if removed:
+            logger.info(
+                "Removed {} line/area marking box(es) from '{}'; these "
+                "markings come from the surface masks.",
+                removed,
+                image_name,
+            )
+
+        detections_by_image[image_name] = kept
+        total += removed
+
+    return total
+
+
+# Ontology classes for barriers that stand up from the ground. Grounding
+# sometimes puts a "guardrail" box on a curb or sidewalk edge (pilot check,
+# 2026-11-18: 3 of 5 guardrail boxes in a Japanese frame lay on the curb,
+# with 71-99% of their SAM mask on Curb or Sidewalk pixels, while the real
+# rails were 82-99% Guard Rail or Fence). road_median is left out because
+# a median can be painted flat on the road.
+DEFAULT_UPRIGHT_BARRIER_CLASSES: tuple[str, ...] = (
+    "guardrail",
+    "guard_rail",
+    "barricade",
+    "construction_barrier",
+    "water_filled_barrier",
+    "crash_cushion",
+)
+
+# Surface classes that are flat ground: an upright barrier's mask should
+# not lie mostly on these.
+FLAT_GROUND_SURFACES: tuple[str, ...] = (
+    "Road",
+    "Sidewalk",
+    "Curb",
+    "Curb Cut",
+    "Bike Lane",
+    "Service Lane",
+    "Parking",
+    "Pedestrian Area",
+    "Crosswalk - Plain",
+    "Lane Marking - Crosswalk",
+    "Lane Marking - General",
+    "Rail Track",
+    "Manhole",
+    "Catch Basin",
+    "Pothole",
+)
+
+FLAT_GROUND_MAX_FRACTION = 0.6
+
+
+def remove_barriers_on_flat_ground(
+    detections_by_image: dict[str, list[dict[str, Any]]],
+    outputs_dir: Path,
+    classes: tuple[str, ...] | list[str] = (),
+    max_fraction: float = FLAT_GROUND_MAX_FRACTION,
+) -> list[str]:
+    """Drop upright-barrier boxes whose SAM mask lies on flat ground.
+
+    A box is dropped when at least ``max_fraction`` of its SAM 2 mask
+    falls on road, sidewalk, curb or similar surface pixels. Boxes without
+    a SAM mask or surface map are kept. Changes ``detections_by_image`` in
+    place and returns the names of the images that lost a box.
+    """
+
+    barrier_classes = {
+        _class_key(c) for c in (classes or DEFAULT_UPRIGHT_BARRIER_CLASSES)
+    }
+    surface_classes = load_surface_classes(outputs_dir)
+    flat_values = np.array(
+        [
+            index
+            for index, name in enumerate(surface_classes, start=1)
+            if name in FLAT_GROUND_SURFACES
+        ],
+        dtype=np.uint8,
+    )
+    changed: list[str] = []
+
+    if flat_values.size == 0:
+        return changed
+
+    for image_name, detections in list(detections_by_image.items()):
+        if not isinstance(detections, list):
+            continue
+
+        label_path = surface_mask_path(outputs_dir, Path(image_name).stem)
+        label_map = None
+        kept = []
+
+        for detection in detections:
+            class_name = _class_key(
+                detection.get("class_name") or detection.get("final_label")
+            ) if isinstance(detection, dict) else ""
+            mask_path = (
+                (detection.get("segmentation") or {}).get("mask_path")
+                if class_name in barrier_classes
+                else None
+            )
+
+            if not mask_path or not Path(mask_path).exists():
+                kept.append(detection)
+                continue
+
+            if label_map is None:
+                if not label_path.exists():
+                    kept.append(detection)
+                    continue
+                label_map = np.asarray(Image.open(label_path))
+
+            with Image.open(mask_path) as mask_image:
+                if mask_image.size != (label_map.shape[1], label_map.shape[0]):
+                    mask_image = mask_image.resize(
+                        (label_map.shape[1], label_map.shape[0]),
+                        Image.NEAREST,
+                    )
+                mask = np.asarray(mask_image.convert("L")) > 127
+
+            area = int(mask.sum())
+            if area == 0:
+                kept.append(detection)
+                continue
+
+            fraction = float(np.isin(label_map[mask], flat_values).mean())
+            detection["flat_ground_fraction"] = round(fraction, 3)
+
+            if fraction >= max_fraction:
+                logger.info(
+                    "Removed {} box {} from '{}': {:.0%} of its mask is "
+                    "road, sidewalk or curb.",
+                    class_name,
+                    detection.get("bbox"),
+                    image_name,
+                    fraction,
+                )
+                continue
+
+            kept.append(detection)
+
+        if len(kept) != len(detections):
+            changed.append(image_name)
+        detections_by_image[image_name] = kept
+
+    return changed
+
+
 # Display colours (RGB). Unlisted classes get a colour from their name.
 _SURFACE_COLOURS: dict[str, tuple[int, int, int]] = {
     "Road": (128, 64, 128),

@@ -256,3 +256,5 @@ tests/
 grounding_first/
 traffic_ontology_test.json
 dataset/
+# Paper draft (kept out of git)
+paper/

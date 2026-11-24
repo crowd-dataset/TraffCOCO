@@ -406,7 +406,37 @@ class CandidateRanker:
         if not query_category or not candidate_category:
             return True
 
-        return query_category == candidate_category
+        if query_category == candidate_category:
+            return True
+
+        # The scene model sometimes picks the wrong broad group (e.g. a
+        # "large billboard" tagged traffic_sign). Keep a class whose own
+        # name or keyword appears in the observed object name, so the
+        # group cannot hide the class the model actually named.
+        return self._observed_names_class(query, candidate)
+
+    @staticmethod
+    def _observed_names_class(
+        query: RetrievalQuery,
+        candidate: CandidateMatch,
+    ) -> bool:
+
+        observed = " " + re.sub(
+            r"[^a-z0-9]+", " ", str(query.observed_object or "").lower()
+        ) + " "
+
+        data = candidate.entry.data
+        names = [str(data.get("class_name", "")).replace("_", " ")]
+        names += list(
+            (data.get("semantic_information") or {}).get("keywords") or []
+        )
+
+        for name in names:
+            name = re.sub(r"[^a-z0-9]+", " ", str(name).lower()).strip()
+            if len(name) >= 4 and f" {name} " in observed:
+                return True
+
+        return False
 
     def _score_class_identity(
         self,
