@@ -185,12 +185,22 @@ Many labelled Vistas objects are tiny (a few pixels); for objects at least 24 px
 
 | Objects | Precision | Recall |
 |---|---|---|
-| All sizes | 90.9% | 32.8% |
+| All sizes (default) | 90.9% | 32.8% |
 | At least 16 px | 91.0% | 51.8% |
-| At least 24 px (default) | 90.1% | 59.1% |
+| At least 24 px | 90.1% | 59.1% |
 | At least 32 px | 90.5% | 63.5% |
 
-The default drops rare classes found by grounding alone (arrows, pedestrian signals, cones, bicycles) and streetlights, which Vistas labels as the lamp head only and so cannot be measured here. In a by-eye look at 48 of the 174 boxes the gate keeps that Vistas counts as false (at least 24 px), about half were real objects Vistas does not label (route and street-name signs, parking signs, cars behind fences, posters), so the true precision is likely higher. The remaining errors include cyclists called pedestrians, LED speed signs called traffic lights and boxes over two objects. The Vistas panoptic model was trained on Vistas, so these numbers are optimistic for CROWD frames.
+The gate drops rare classes found by grounding alone (arrows, pedestrian signals, cones, bicycles) and keeps only confident detector-only shop signs, traffic signs, crosswalks and manholes; with a minimum size it also drops streetlights, which Vistas labels as the lamp head only (under 24 px), so they cannot be measured there. In a by-eye look at 48 of the 174 boxes the gate keeps that Vistas counts as false (at least 24 px), about half were real objects Vistas does not label (route and street-name signs, parking signs, cars behind fences, posters), so the true precision is likely higher. The remaining errors include cyclists called pedestrians, LED speed signs called traffic lights and boxes over two objects. The Vistas panoptic model was trained on Vistas, so these numbers are optimistic for CROWD frames.
+
+**CROWD check.** On the 100 global frames above, the run before the detector stage and the current pipeline were reviewed box by box with one rubric (by Claude from crops, not by people): right kind of object, exactly right including the fine class, and relative recall (the share of all real objects that either run found). Unsure boxes are left out.
+
+| 100 CROWD frames | Boxes | Right kind | Exactly right | Relative recall |
+|---|---|---|---|---|
+| Before the detector stage | 841 | 81.6% | 76.2% | 61.0% |
+| Current pipeline, full export | 1180 | 84.9% | 79.2% | 88.8% |
+| Current pipeline, `instances_precise.json` (no minimum size) | 777 | 90.5% | 84.8% | 65.9% |
+
+The current pipeline finds 46% more real objects with fewer errors per box; shop signs (21% to 94% relative recall) and traffic signs (38% to 92%) gained most. CROWD frames are smaller than Vistas images, so a 24 px minimum kept only 434 boxes (90.6% right kind, 38% relative recall), which is why the gate keeps every size by default. The remaining errors are mostly video logos and titles taken for signs or billboards, streetlight boxes on part of the pole, chevron posts taken for signs, riders called pedestrians and pedestrian signals called vehicle lights.
 
 Known issues that phase 2 must measure and fix:
 
