@@ -1,4 +1,4 @@
-from annotation_pipeline.pipeline.detector_fusion import fuse_proposals, fusion_group
+from annotation_pipeline.pipeline.detector_fusion import fuse_proposals, fusion_group, in_overlay_corner
 
 GROUPS = {
     "car": "vehicle",
@@ -42,7 +42,7 @@ def test_unmatched_proposal_added_and_grounding_box_dropped():
     names = sorted(d["class_name"] for d in fused)
     assert names == ["car", "streetlight", "unreadable_traffic_sign"]
     assert counts == {"matched": 0, "added": 2, "dropped": 1, "kept_unmatched": 0, "in_billboard": 0,
-                      "streetlight_no_lamp": 0}
+                      "streetlight_no_lamp": 0, "video_overlay": 0}
     added = [d for d in fused if d.get("object_id", "").startswith("det_")]
     assert {d["class_id"] for d in added} == {"V001", "S001"}
 
@@ -140,3 +140,24 @@ def test_streetlight_needs_a_lamp_head():
     # Without lamp heads from the detector the check is off.
     fused, counts = fuse_proposals(detections, [], GROUPS, IDS)
     assert len(fused) == 3 and counts["streetlight_no_lamp"] == 0
+
+
+def test_overlay_corner():
+    # 1280x720 frame: a channel logo in the top-left corner, a caption at the bottom right.
+    assert in_overlay_corner([10, 10, 160, 95], 1280, 720)
+    assert in_overlay_corner([1100, 640, 1275, 715], 1280, 720)
+    assert not in_overlay_corner([10, 10, 40, 20], 1280, 720)  # too small: a distant real sign
+    assert not in_overlay_corner([500, 10, 650, 95], 1280, 720)  # not at the side
+    assert not in_overlay_corner([10, 300, 160, 400], 1280, 720)  # not in the top or bottom band
+
+
+def test_video_overlay_dropped_from_signs_only():
+    logo = {"class_name": "unreadable_traffic_sign", "bbox": [10, 10, 160, 95]}
+    car = {"class_name": "car", "bbox": [10, 10, 160, 95]}
+    sign = {"class_name": "stop_sign", "bbox": [600, 300, 640, 340]}
+    fused, counts = fuse_proposals([logo, sign], [car], GROUPS, IDS, image_size=(1280, 720))
+    assert sorted(d["class_name"] for d in fused) == ["car", "stop_sign"]
+    assert counts["video_overlay"] == 1
+    # Without the image size the check is off.
+    fused, counts = fuse_proposals([logo, sign], [car], GROUPS, IDS)
+    assert len(fused) == 3 and counts["video_overlay"] == 0

@@ -5564,6 +5564,8 @@ def main() -> None:
             totals: dict[str, int] = {}
 
             for image_path in image_paths:
+                with Image.open(image_path) as image:
+                    image_size = image.size
                 fused, counts = fuse_proposals(
                     final_detections_by_image.get(image_path.name, []),
                     proposals_by_image.get(image_path.name, []),
@@ -5572,6 +5574,7 @@ def main() -> None:
                     mode=proposal_settings.get("mode") or "replace",
                     image_name=image_path.name,
                     check_lamps=proposal_engine.checks_lamp_heads,
+                    image_size=image_size,
                 )
                 final_detections_by_image[image_path.name] = fused
                 for key, value in counts.items():
