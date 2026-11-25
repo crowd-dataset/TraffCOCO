@@ -41,7 +41,8 @@ def test_unmatched_proposal_added_and_grounding_box_dropped():
     fused, counts = fuse_proposals(detections, proposals, GROUPS, IDS, image_name="f.png")
     names = sorted(d["class_name"] for d in fused)
     assert names == ["car", "streetlight", "unreadable_traffic_sign"]
-    assert counts == {"matched": 0, "added": 2, "dropped": 1, "kept_unmatched": 0, "in_billboard": 0}
+    assert counts == {"matched": 0, "added": 2, "dropped": 1, "kept_unmatched": 0, "in_billboard": 0,
+                      "streetlight_no_lamp": 0}
     added = [d for d in fused if d.get("object_id", "").startswith("det_")]
     assert {d["class_id"] for d in added} == {"V001", "S001"}
 
@@ -121,3 +122,21 @@ def test_conflict_check_lets_light_become_pedestrian_signal():
     conflicts = {0: _verify(["traffic_light_red", "pedestrian_signal"])}
     kept = decide(detections, conflicts, {0: "pedestrian_signal"}, IDS, GROUPS)
     assert kept[0]["class_name"] == "pedestrian_signal"
+
+
+def test_streetlight_needs_a_lamp_head():
+    lamp = {"class_name": "streetlight", "bbox": [500, 0, 520, 200]}
+    pole_only = {"class_name": "streetlight", "bbox": [700, 100, 715, 200]}
+    head_only = {"class_name": "streetlight", "bbox": [900, 0, 960, 30]}
+    heads = [
+        {"class_name": "streetlight", "detector_label": "Street Light", "bbox": [505, 5, 518, 12]},
+        {"class_name": "streetlight", "detector_label": "Street Light", "bbox": [910, 5, 950, 20]},
+        {"class_name": "streetlight", "detector_label": "Street Light", "bbox": [700, 20, 712, 28]},
+    ]
+    detections = [lamp, pole_only, head_only]
+    fused, counts = fuse_proposals(detections, heads, GROUPS, IDS, check_lamps=True)
+    assert [d["bbox"] for d in fused] == [lamp["bbox"]]
+    assert counts["streetlight_no_lamp"] == 2 and counts["added"] == 0
+    # Without lamp heads from the detector the check is off.
+    fused, counts = fuse_proposals(detections, [], GROUPS, IDS)
+    assert len(fused) == 3 and counts["streetlight_no_lamp"] == 0

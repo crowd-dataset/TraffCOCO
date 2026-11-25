@@ -31,7 +31,8 @@ up to ``panoptic_max_side`` pixels on the long side instead.
 
 Outputs (under ``outputs/detector_proposals``)
 ----------------------------------------------
-<stem>.json   the proposals of one image (reused when the stage runs again)
+<stem>.json   the proposals of one image (reused when the stage runs again
+              with the same detector classes)
 """
 
 from __future__ import annotations
@@ -59,9 +60,10 @@ DEFAULT_YOLO_CLASSES: dict[str, tuple[str, float]] = {
     "motorcycle": ("motorcycle", 0.25),
 }
 
-# Vistas v1.2 class name -> (ontology class, minimum score). Street lights
-# are left out: Vistas labels the lamp head only, the pipeline boxes the
-# whole lamp post.
+# Vistas v1.2 class name -> (ontology class, minimum score). Vistas labels
+# a street light's lamp head only, while the pipeline boxes the whole lamp
+# post, so "Street Light" boxes are not added as objects: fusion uses them
+# as evidence that a streetlight box holds a lamp (see detector_fusion.py).
 DEFAULT_PANOPTIC_CLASSES: dict[str, tuple[str, float]] = {
     "Traffic Sign (Front)": ("unreadable_traffic_sign", 0.7),
     "Truck": ("truck", 0.7),
@@ -73,7 +75,11 @@ DEFAULT_PANOPTIC_CLASSES: dict[str, tuple[str, float]] = {
     "Crosswalk - Plain": ("zebra_crossing", 0.5),
     "Lane Marking - Crosswalk": ("zebra_crossing", 0.5),
     "Manhole": ("manhole_cover", 0.9),
+    "Street Light": ("streetlight", 0.5),
 }
+
+# Panoptic label of a lamp head.
+LAMP_HEAD_LABEL = "Street Light"
 
 
 def proposal_output_dir(outputs_dir: Path) -> Path:
@@ -240,19 +246,36 @@ class DetectorProposalEngine:
     # Stage entry point
     # ------------------------------------------------------------------
 
+    @property
+    def checks_lamp_heads(self) -> bool:
+        """Whether the proposals include lamp heads for the streetlight check."""
+
+        return LAMP_HEAD_LABEL in self.panoptic_classes
+
+    def _labels(self) -> dict[str, list[str]]:
+
+        return {"yolo": sorted(self.yolo_classes), "panoptic": sorted(self.panoptic_classes)}
+
     def process_images(self, image_paths: list[Path]) -> dict[str, list[dict]]:
-        """Return {image name: proposals}; cached per image under output_dir."""
+        """Return {image name: proposals}; cached per image under output_dir.
+
+        A cached file is reused only if it was made with the same detector
+        classes, so adding a class (such as lamp heads) runs the detectors again.
+        """
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         proposals: dict[str, list[dict]] = {}
         todo = []
+        labels = self._labels()
 
         for path in image_paths:
             cached = self.output_dir / f"{Path(path).stem}.json"
             if cached.exists():
                 try:
-                    proposals[path.name] = json.loads(cached.read_text())["proposals"]
-                    continue
+                    data = json.loads(cached.read_text())
+                    if data.get("labels") == labels:
+                        proposals[path.name] = data["proposals"]
+                        continue
                 except (OSError, ValueError, KeyError):
                     pass
             todo.append(Path(path))
@@ -266,6 +289,7 @@ class DetectorProposalEngine:
                 proposals[path.name] = boxes
                 (self.output_dir / f"{path.stem}.json").write_text(json.dumps({
                     "image": path.name,
+                    "labels": labels,
                     "proposals": boxes,
                 }, indent=1))
             logger.info(
