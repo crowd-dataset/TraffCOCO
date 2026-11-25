@@ -93,6 +93,19 @@ DEFAULT_SURFACE_MARKING_CLASSES: tuple[str, ...] = (
     "rumble_strip_marking",
 )
 
+# Ontology classes for ground areas the surface masks already label (Road,
+# Sidewalk, Curb). Their grounding boxes were mostly a large rectangle over
+# road, verge, wall and vegetation (two reviewed sets of 100 CROWD frames,
+# 2026-11-25: 9 of 17 such boxes wrong), so they are dropped like the
+# line markings above and the areas are taken from the surface masks.
+DEFAULT_SURFACE_REGION_CLASSES: tuple[str, ...] = (
+    "urban_road",
+    "highway",
+    "unpaved_road",
+    "sidewalk",
+    "curb",
+)
+
 
 def _class_key(name: Any) -> str:
 
@@ -103,13 +116,17 @@ def remove_surface_covered_markings(
     detections_by_image: dict[str, list[dict[str, Any]]],
     classes: tuple[str, ...] | list[str] = (),
 ) -> int:
-    """Drop line/area marking boxes that the surface masks cover.
+    """Drop line/area marking and ground-area boxes the surface masks cover.
 
     Changes ``detections_by_image`` in place and returns how many boxes
-    were removed. ``classes`` defaults to DEFAULT_SURFACE_MARKING_CLASSES.
+    were removed. ``classes`` defaults to DEFAULT_SURFACE_MARKING_CLASSES
+    plus DEFAULT_SURFACE_REGION_CLASSES.
     """
 
-    drop = {_class_key(c) for c in (classes or DEFAULT_SURFACE_MARKING_CLASSES)}
+    drop = {
+        _class_key(c)
+        for c in (classes or DEFAULT_SURFACE_MARKING_CLASSES + DEFAULT_SURFACE_REGION_CLASSES)
+    }
     total = 0
 
     for image_name, detections in list(detections_by_image.items()):
@@ -130,8 +147,8 @@ def remove_surface_covered_markings(
 
         if removed:
             logger.info(
-                "Removed {} line/area marking box(es) from '{}'; these "
-                "markings come from the surface masks.",
+                "Removed {} marking or ground-area box(es) from '{}'; these "
+                "come from the surface masks.",
                 removed,
                 image_name,
             )
@@ -268,6 +285,109 @@ def remove_barriers_on_flat_ground(
 
             kept.append(detection)
 
+        if len(kept) != len(detections):
+            changed.append(image_name)
+        detections_by_image[image_name] = kept
+
+    return changed
+
+
+# Roadside objects that need surface evidence inside their box (share of
+# box pixels per surface class). Fitted on two reviewed sets of 100 CROWD
+# frames (2026-11-25), where these grounding boxes were often wrong:
+# bollards on boulders, walls, fences or empty road (Vistas labels a
+# boulder or wall as Wall or Fence, a real bollard mostly as none of the
+# surface classes); guardrails over road and verge with no rail; medians
+# on plain road or verge; utility poles, masts and pylons called flexible
+# posts.
+BOLLARD_MAX_WALL_FENCE = 0.5
+BOLLARD_MAX_ROAD = 0.9
+GUARDRAIL_MIN_RAIL = 0.1
+MEDIAN_MIN_BARRIER_CURB = 0.08
+POST_MIN_TOP = 0.3
+POST_MAX_WIDTH = 0.15
+
+
+def roadside_unsupported(class_name: str, bbox: Any, label_map: np.ndarray, classes: list[str]) -> str | None:
+    """Why a roadside box lacks surface evidence, or None if it is kept.
+
+    ``label_map`` is the surface map of the frame (values index
+    ``classes`` from 1; 0 = no surface class) at frame resolution.
+    """
+
+    name = _class_key(class_name)
+    if name not in ("bollard", "guardrail", "guard_rail", "road_median", "flexible_post"):
+        return None
+    height, width = label_map.shape[:2]
+    try:
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+    except (TypeError, ValueError):
+        return None
+    if name == "flexible_post":
+        if y1 < POST_MIN_TOP * height or x2 - x1 > POST_MAX_WIDTH * width:
+            return "too tall or wide for a flexible post"
+        return None
+    left, top = max(0, int(x1)), max(0, int(y1))
+    right, bottom = min(width, max(int(x2), left + 1)), min(height, max(int(y2), top + 1))
+    region = label_map[top:bottom, left:right]
+    if region.size == 0:
+        return None
+
+    def share(*names: str) -> float:
+        values = [i for i, n in enumerate(classes, start=1) if n in names]
+        return float(np.isin(region, values).mean()) if values else 0.0
+
+    if name == "bollard":
+        if share("Wall", "Fence") >= BOLLARD_MAX_WALL_FENCE:
+            return "bollard box on a wall or fence"
+        if share("Road") >= BOLLARD_MAX_ROAD:
+            return "bollard box on bare road"
+    elif name in ("guardrail", "guard_rail"):
+        if share("Guard Rail", "Barrier", "Fence") < GUARDRAIL_MIN_RAIL:
+            return "guardrail box without rail, barrier or fence"
+    elif share("Barrier", "Curb") < MEDIAN_MIN_BARRIER_CURB:
+        return "median box without barrier or curb"
+    return None
+
+
+def remove_unsupported_roadside(
+    detections_by_image: dict[str, list[dict[str, Any]]],
+    outputs_dir: Path,
+) -> list[str]:
+    """Drop bollard, guardrail, median and flexible-post boxes the surface
+    map contradicts (see ``roadside_unsupported``).
+
+    Images without a surface map keep their boxes. Changes
+    ``detections_by_image`` in place and returns the names of the images
+    that lost a box.
+    """
+
+    classes = load_surface_classes(outputs_dir)
+    changed: list[str] = []
+    if not classes:
+        return changed
+
+    for image_name, detections in list(detections_by_image.items()):
+        if not isinstance(detections, list):
+            continue
+        label_path = surface_mask_path(outputs_dir, Path(image_name).stem)
+        if not label_path.exists():
+            continue
+        label_map = np.asarray(Image.open(label_path))
+        kept = []
+        for detection in detections:
+            reason = None
+            if isinstance(detection, dict):
+                reason = roadside_unsupported(
+                    detection.get("class_name") or detection.get("final_label"),
+                    detection.get("bbox"),
+                    label_map,
+                    classes,
+                )
+            if reason:
+                logger.info("Removed box {} from '{}': {}.", detection.get("bbox"), image_name, reason)
+                continue
+            kept.append(detection)
         if len(kept) != len(detections):
             changed.append(image_name)
         detections_by_image[image_name] = kept

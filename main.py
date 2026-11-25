@@ -116,6 +116,7 @@ from annotation_pipeline.models.segmentation.surface_segmenter import (
     load_surface_classes,
     overlay_surfaces,
     remove_barriers_on_flat_ground,
+    remove_unsupported_roadside,
     remove_surface_covered_markings,
     surface_mask_path,
 )
@@ -5882,6 +5883,10 @@ def main() -> None:
         # road, sidewalk or curb are grounding errors (a curb boxed as a
         # guardrail); see remove_barriers_on_flat_ground.
         barrier_changed = remove_barriers_on_flat_ground(
+            final_detections_by_image,
+            config.paths.outputs,
+        )
+        barrier_changed += remove_unsupported_roadside(
             final_detections_by_image,
             config.paths.outputs,
         )
