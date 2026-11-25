@@ -181,7 +181,7 @@ By continent: Asia 80%, Africa 73%, Europe 69%, South America 67%, North America
 
 Many labelled Vistas objects are tiny (a few pixels); for objects at least 24 px across the last row reaches 80.5% precision and 69.0% recall (all 200 images).
 
-**High-precision export.** `tools/quality_gate.py` writes `instances_precise.json` next to the full export, keeping only the boxes that pass a confidence cut-off for their group and source (a detector box that grounding also found, a detector box alone, or a grounding box alone) and a minimum size. The cut-offs (`tools/quality_gate_vistas.json`) were fitted on the 200 Vistas images and checked by 5-fold cross-validation over images:
+**High-precision export.** `tools/quality_gate.py` writes `instances_precise.json` next to the full export. It keeps only the boxes that pass a confidence cut-off for their group and source (a detector box that grounding also found, a detector box alone, or a grounding box alone) and a minimum size. The cut-offs (`tools/quality_gate_vistas.json`) were fitted on the 200 Vistas images and checked by 5-fold cross-validation over images:
 
 | Objects | Precision | Recall |
 |---|---|---|
@@ -190,17 +190,23 @@ Many labelled Vistas objects are tiny (a few pixels); for objects at least 24 px
 | At least 24 px | 90.1% | 59.1% |
 | At least 32 px | 90.5% | 63.5% |
 
-The gate drops rare classes found by grounding alone (arrows, pedestrian signals, cones, bicycles) and keeps only confident detector-only shop signs, traffic signs, crosswalks and manholes; with a minimum size it also drops streetlights, which Vistas labels as the lamp head only (under 24 px), so they cannot be measured there. In a by-eye look at 48 of the 174 boxes the gate keeps that Vistas counts as false (at least 24 px), about half were real objects Vistas does not label (route and street-name signs, parking signs, cars behind fences, posters), so the true precision is likely higher. The remaining errors include cyclists called pedestrians, LED speed signs called traffic lights and boxes over two objects. The Vistas panoptic model was trained on Vistas, so these numbers are optimistic for CROWD frames.
+The gate drops rare classes found by grounding alone (arrows, pedestrian signals, cones, bicycles) and keeps only confident detector-only shop signs, traffic signs, crosswalks and manholes. With a minimum size it also drops streetlights, which Vistas labels as the lamp head only (under 24 px), so they cannot be measured there. In a by-eye look at 48 of the 174 boxes the gate keeps that Vistas counts as false (at least 24 px), about half were real objects Vistas does not label (route and street-name signs, parking signs, cars behind fences, posters), so the true precision is likely higher. The remaining errors include cyclists called pedestrians, LED speed signs called traffic lights and boxes over two objects. The Vistas panoptic model was trained on Vistas, so these numbers are optimistic for CROWD frames.
 
-**CROWD check.** On the 100 global frames above, the run before the detector stage and the current pipeline were reviewed box by box with one rubric (by Claude from crops, not by people): right kind of object, exactly right including the fine class, and relative recall (the share of all real objects that either run found). Unsure boxes are left out.
+A veto then drops the boxes that a small gradient-boosted model (`tools/quality_gate_veto_vistas.json`, fitted with `tools/fit_quality_gate.py`) scores below 0.2 (`--veto 0` turns it off). The model reads only what the export keeps: group, source and detector, the detector, SAM, scene and ontology scores, the box size and place in the image, and how the box overlaps the others. Under cross-validation on a newer run of the 200 Vistas images, the veto raised precision by 0.3 to 0.7 points at every minimum size and lost no real objects. On the CROWD frames below it raised precision from 89.5% to 90.9%, mostly by dropping wrong posts and barriers and some shop signs. Used alone with its own cut-offs, the model gained 2 to 4 recall points at about 90% precision on Vistas, but on CROWD it kept only half as many real objects as the cut-offs. It drops classes Vistas does not label (bollards, guardrails) and was stricter on CROWD frames for every group, so it is used only as a veto.
+
+Most of the recall still missing on Vistas is a detection limit, not a gate limit: 44% of the labelled Vistas objects are under 16 px (mostly distant street lamps, signs and lights) and the full export finds only 18% of those. Two ways to raise that ceiling were tested and not kept. On 80 of the images, running both detectors on 2x2 upscaled tiles found 7 points more objects, but its extra boxes were only about half right, so the gate kept 1 to 2 points more recall for four times the detector time. The panoptic model's street-light boxes were only 52-60% right on Vistas itself.
+
+**CROWD check.** On the 100 global frames above, three runs were reviewed box by box with one rubric (by Claude from crops, not by people): the run before the detector stage, the first run with detector proposals and the current pipeline. Each box is scored for the right kind of object, exactly right including the fine class, and relative recall (the share of all real objects that any of the runs found). Unsure boxes are left out.
 
 | 100 CROWD frames | Boxes | Right kind | Exactly right | Relative recall |
 |---|---|---|---|---|
-| Before the detector stage | 841 | 81.6% | 76.2% | 61.0% |
-| Current pipeline, full export | 1180 | 84.9% | 79.2% | 88.8% |
-| Current pipeline, `instances_precise.json` (no minimum size) | 777 | 90.5% | 84.8% | 65.9% |
+| Before the detector stage | 841 | 81.6% | 76.2% | 56.7% |
+| With detector proposals, full export | 1180 | 84.9% | 79.2% | 82.5% |
+| Current pipeline, full export | 1238 | 83.3% | 77.9% | 88.0% |
+| Current pipeline, cut-offs only | 801 | 89.5% | 84.1% | 63.6% |
+| Current pipeline, `instances_precise.json` (cut-offs and veto) | 755 | 90.9% | 85.2% | 60.8% |
 
-The current pipeline finds 46% more real objects with fewer errors per box; shop signs (21% to 94% relative recall) and traffic signs (38% to 92%) gained most. CROWD frames are smaller than Vistas images, so a 24 px minimum kept only 434 boxes (90.6% right kind, 38% relative recall), which is why the gate keeps every size by default. The remaining errors are mostly video logos and titles taken for signs or billboards, streetlight boxes on part of the pole, chevron posts taken for signs, riders called pedestrians and pedestrian signals called vehicle lights.
+The detector stage finds about half again as many real objects with fewer errors per box; shop signs and traffic signs gained most. CROWD frames are smaller than Vistas images, so a 24 px minimum kept far fewer real objects at the same precision (38% relative recall in the first check), which is why the gate keeps every size by default. Most remaining errors in `instances_precise.json` are streetlight boxes (32 of 103 wrong: part of the pole or a pole without a lamp), which Vistas cannot judge, then video logos and titles taken for signs or billboards, chevron posts taken for signs, riders called pedestrians and pedestrian signals called vehicle lights.
 
 Known issues that phase 2 must measure and fix:
 
