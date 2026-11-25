@@ -202,11 +202,16 @@ Most of the recall still missing on Vistas is a detection limit, not a gate limi
 |---|---|---|---|---|
 | Before the detector stage | 841 | 81.6% | 76.2% | 56.7% |
 | With detector proposals, full export | 1180 | 84.9% | 79.2% | 82.5% |
-| Current pipeline, full export | 1238 | 83.3% | 77.9% | 88.0% |
-| Current pipeline, cut-offs only | 801 | 89.5% | 84.1% | 63.6% |
-| Current pipeline, `instances_precise.json` (cut-offs and veto) | 755 | 90.9% | 85.2% | 60.8% |
+| Current pipeline before the streetlight check, full export | 1238 | 83.3% | 77.9% | 88.0% |
+| Current pipeline before the streetlight check, cut-offs only | 801 | 89.5% | 84.1% | 63.6% |
+| Current pipeline before the streetlight check, cut-offs and veto | 755 | 90.9% | 85.2% | 60.8% |
+| With the streetlight check, full export | 1177 | 85.2% | 79.6% | 85.6% |
+| With the streetlight check, `instances_precise.json` (cut-offs and veto) | 695 | 94.8% | 88.6% | 58.5% |
+| With the streetlight check, `--target 0.85` | 844 | 92.5% | 86.8% | 68.1% |
 
-The detector stage finds about half again as many real objects with fewer errors per box; shop signs and traffic signs gained most. CROWD frames are smaller than Vistas images, so a 24 px minimum kept far fewer real objects at the same precision (38% relative recall in the first check), which is why the gate keeps every size by default. Most remaining errors in `instances_precise.json` are streetlight boxes (32 of 103 wrong: part of the pole or a pole without a lamp), which Vistas cannot judge, then video logos and titles taken for signs or billboards, chevron posts taken for signs, riders called pedestrians and pedestrian signals called vehicle lights.
+The streetlight check (in `detector_fusion.py`) keeps a grounding streetlight box only if the panoptic model finds a lamp head (Vistas "Street Light") inside it and the box is not wider than tall. Before it, 32 of 103 streetlight boxes were wrong (part of a pole with the lamp outside the box, trees, several poles in one box, a lamp head alone). It dropped 31 of them and 26 of the 67 real lamps, mostly distant ones whose heads the panoptic model missed. The 42 streetlight boxes left were 98% right. (These rows apply the check, with lamp heads from the panoptic model at the pipeline's resolution, to the reviewed boxes of the run above; the full pipeline was not run again.) Since the high-precision export then lies well above 90% on CROWD, a lower target keeps more objects there: `--target 0.85` kept 68% of the real objects at 92.5% (cut-off table at 0.85 on Vistas: 83% precision, 40% recall). These targets were read off this review, so they are a guide for CROWD runs, not a measured result; the default stays 0.92.
+
+The detector stage finds about half again as many real objects with fewer errors per box; shop signs and traffic signs gained most. CROWD frames are smaller than Vistas images, so a 24 px minimum kept far fewer real objects at the same precision (38% relative recall in the first check), which is why the gate keeps every size by default. Before the streetlight check, most remaining errors in `instances_precise.json` were streetlight boxes; the others are video logos and titles taken for signs or billboards, chevron posts taken for signs, riders called pedestrians and pedestrian signals called vehicle lights.
 
 Known issues that phase 2 must measure and fix:
 

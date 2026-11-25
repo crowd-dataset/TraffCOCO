@@ -5571,6 +5571,7 @@ def main() -> None:
                     class_ids=class_ids,
                     mode=proposal_settings.get("mode") or "replace",
                     image_name=image_path.name,
+                    check_lamps=proposal_engine.checks_lamp_heads,
                 )
                 final_detections_by_image[image_path.name] = fused
                 for key, value in counts.items():
