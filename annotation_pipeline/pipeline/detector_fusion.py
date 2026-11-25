@@ -36,6 +36,18 @@ alone. The check dropped 31 of the wrong boxes and 26 of the 67 right ones
 (mostly distant lamps whose heads the panoptic model missed), so the
 streetlight boxes left were 98% right.
 
+Dashcam videos often carry a channel logo, watermark or title burned into
+a corner of the picture, and the panoptic model takes it for a billboard
+or sign. When the image size is given, a traffic-sign or commercial-sign
+box is dropped if it lies in the top or bottom ``OVERLAY_BAND`` of the
+frame, reaches into the outer ``OVERLAY_SIDE`` at the left or right, and
+is at least ``OVERLAY_MIN_HEIGHT`` of the frame tall (small real signs at
+the frame edge are kept). On the two reviewed sets of 100 CROWD frames
+(2026-11-25) it dropped 29 of 38 overlay boxes and no real one; on the
+200 Vistas images, which have no overlays, it dropped 1 of 1,093 right
+sign boxes and 3 false ones. Overlays elsewhere (captions across the
+middle) are not caught.
+
 Added boxes go through de-duplication and the conflict check like any
 other box, so the scene VLM still decides their finer class, light state
 or sign type. The conflict check keeps a detector box in its group and
@@ -53,6 +65,10 @@ BILLBOARD_LABELS = frozenset({"Billboard", "Banner"})
 LAMP_HEAD_LABEL = "Street Light"
 LAMP_INSIDE = 0.5
 LAMP_MIN_ASPECT = 0.7
+OVERLAY_BAND = 0.2
+OVERLAY_SIDE = 0.05
+OVERLAY_MIN_HEIGHT = 0.03
+OVERLAY_GROUPS = frozenset({"traffic_sign", "commercial_sign"})
 
 CAR = frozenset({
     "car", "suv", "van", "taxi", "kei_car", "london_black_cab", "police_vehicle",
@@ -150,12 +166,14 @@ def fuse_proposals(
     mode: str = "replace",
     image_name: str = "",
     check_lamps: bool = False,
+    image_size: tuple[float, float] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Return (fused detections, counts) for one image.
 
     ``class_groups`` maps ontology class names to super-categories and
     ``class_ids`` to ontology class ids. ``check_lamps`` turns on the
     streetlight check; set it only when the proposals include lamp heads.
+    ``image_size`` (width, height) turns on the video-overlay check.
     """
 
     def group_of(name: str) -> str | None:
@@ -178,7 +196,7 @@ def fuse_proposals(
     covered = {group_of(p["class_name"]) for p in proposals}
     counts = {
         "matched": 0, "added": 0, "dropped": 0, "kept_unmatched": 0, "in_billboard": 0,
-        "streetlight_no_lamp": 0,
+        "streetlight_no_lamp": 0, "video_overlay": 0,
     }
 
     # Greedy one-to-one matching, best IoU first, within a group.
@@ -251,7 +269,30 @@ def fuse_proposals(
             if name_of(d) != "streetlight" or holds_lamp(d.get("bbox"), lamp_heads)
         ]
         counts["streetlight_no_lamp"] = before - len(kept)
+    if image_size:
+        before = len(kept)
+        kept = [
+            d for d in kept
+            if group_of(name_of(d)) not in OVERLAY_GROUPS
+            or not in_overlay_corner(d.get("bbox"), *image_size)
+        ]
+        counts["video_overlay"] = before - len(kept)
     return kept, counts
+
+
+def in_overlay_corner(bbox: Any, width: float, height: float) -> bool:
+    """Whether a box sits where videos put channel logos and titles."""
+
+    try:
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+        width, height = float(width), float(height)
+    except (TypeError, ValueError):
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    in_band = y2 <= OVERLAY_BAND * height or y1 >= (1 - OVERLAY_BAND) * height
+    at_side = x1 <= OVERLAY_SIDE * width or x2 >= (1 - OVERLAY_SIDE) * width
+    return in_band and at_side and y2 - y1 >= OVERLAY_MIN_HEIGHT * height
 
 
 def holds_lamp(bbox: Any, lamp_heads: list[Any]) -> bool:
